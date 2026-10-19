@@ -87,6 +87,17 @@ std::vector<std::uint8_t> autocorrelation_support(std::span<const float> intensi
   return support;
 }
 
+std::vector<float> simulate_intensity(std::span<const Complex> object, const Shape& shape) {
+  check_shape(shape);
+  if (object.size() != numel(shape)) throw std::invalid_argument("object does not match shape");
+  auto wave = detail::to_fft_order<Complex>(object, shape);
+  cpu::Fft(shape).forward(wave, wave);
+  const auto centered = detail::to_centered<Complex>(wave, shape);
+  std::vector<float> intensity(centered.size());
+  std::ranges::transform(centered, intensity.begin(), [](Complex c) { return std::norm(c); });
+  return intensity;
+}
+
 std::vector<std::uint8_t> half_support(std::span<const std::uint8_t> support, const Shape& shape,
                                        int axis) {
   check_shape(shape);

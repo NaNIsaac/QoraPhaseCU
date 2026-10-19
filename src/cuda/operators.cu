@@ -29,6 +29,7 @@ DeviceInfo cuda_device_info() {
   info.sm_major = prop.major;
   info.sm_minor = prop.minor;
   info.memory_bytes = prop.totalGlobalMem;
+  info.l2_bytes = static_cast<std::size_t>(prop.l2CacheSize);
   // Double data rate: two transfers per clock over the bus.
   info.peak_bandwidth_gbs = 2.0 * clock_khz * 1e3 * (prop.memoryBusWidth / 8.0) / 1e9;
   return info;

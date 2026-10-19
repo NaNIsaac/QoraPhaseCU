@@ -4,7 +4,6 @@
 #include <vector>
 
 #include "core/layout.hpp"
-#include "cpu/fft.hpp"
 #include "qoraphasecu/problem.hpp"
 
 namespace qpcu::test {
@@ -46,11 +45,7 @@ inline Synthetic triangle(Shape shape, std::size_t m) {
       }
     }
   }
-  auto wave = detail::to_fft_order<Complex>(s.object, shape);
-  cpu::Fft(shape).forward(wave, wave);
-  wave = detail::to_centered<Complex>(wave, shape);
-  s.intensity.resize(wave.size());
-  for (std::size_t k = 0; k < wave.size(); ++k) s.intensity[k] = std::norm(wave[k]);
+  s.intensity = simulate_intensity(s.object, shape);
   return s;
 }
 

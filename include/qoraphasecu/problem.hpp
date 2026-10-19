@@ -37,6 +37,10 @@ Problem make_problem(std::span<const float> intensity, Shape shape,
 std::vector<std::uint8_t> autocorrelation_support(std::span<const float> intensity,
                                                   const Shape& shape, float threshold = 0.1f);
 
+// |centred unitary FFT(object)|^2: the noiseless intensity a CDI detector would
+// record, for simulations and tests.
+std::vector<float> simulate_intensity(std::span<const Complex> object, const Shape& shape);
+
 // Keeps the part of `support` below its centre of mass along `axis`, which
 // breaks the r -> -r symmetry that lets the twin fit as well as the object.
 std::vector<std::uint8_t> half_support(std::span<const std::uint8_t> support, const Shape& shape,

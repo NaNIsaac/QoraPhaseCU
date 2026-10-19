@@ -79,6 +79,7 @@ struct DeviceInfo {
   int sm_major = 0;
   int sm_minor = 0;
   std::size_t memory_bytes = 0;
+  std::size_t l2_bytes = 0;
   double peak_bandwidth_gbs = 0.0;  // 2 * memory clock * bus width
 };
 
