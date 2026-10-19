@@ -1,0 +1,8 @@
+add_executable(qpcu_bench bench.cpp)
+target_link_libraries(qpcu_bench PRIVATE qoraphasecu qoraphasecu_warnings)
+if(QORAPHASECU_CUDA)
+  target_sources(qpcu_bench PRIVATE fft_floor.cu)
+  target_link_libraries(qpcu_bench PRIVATE CUDA::cudart_static CUDA::cufft)
+else()
+  target_sources(qpcu_bench PRIVATE fft_floor_none.cpp)
+endif()

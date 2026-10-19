@@ -1,0 +1,64 @@
+#include <cuda_runtime.h>
+#include <cufft.h>
+
+#include <algorithm>
+#include <stdexcept>
+#include <vector>
+
+#include "fft_floor.hpp"
+
+namespace {
+
+void check(bool ok, const char* what) {
+  if (!ok) throw std::runtime_error(what);
+}
+
+}  // namespace
+
+double fft_pair_ms(const qpcu::Shape& shape, int iters) {
+  std::vector<int> dims;
+  for (std::size_t d : shape) dims.push_back(static_cast<int>(d));
+  const std::size_t n = qpcu::numel(shape);
+  cufftComplex* data = nullptr;
+  check(cudaMalloc(&data, n * sizeof(cufftComplex)) == cudaSuccess, "cudaMalloc");
+  check(cudaMemset(data, 0, n * sizeof(cufftComplex)) == cudaSuccess, "cudaMemset");
+  cufftHandle plan{};
+  check(cufftPlanMany(&plan, static_cast<int>(dims.size()), dims.data(), nullptr, 1, 0, nullptr, 1,
+                      0, CUFFT_C2C, 1) == CUFFT_SUCCESS,
+        "cufftPlanMany");
+  // Replayed from a graph like the graph variants, so launch overhead does not
+  // set the floor at small sizes.
+  cudaStream_t stream{};
+  cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+  cufftSetStream(plan, stream);
+  constexpr int kPerGraph = 10;
+  cudaGraph_t graph{};
+  cudaGraphExec_t exec{};
+  check(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal) == cudaSuccess, "capture");
+  for (int i = 0; i < kPerGraph; ++i) {
+    cufftExecC2C(plan, data, data, CUFFT_FORWARD);
+    cufftExecC2C(plan, data, data, CUFFT_INVERSE);
+  }
+  check(cudaStreamEndCapture(stream, &graph) == cudaSuccess, "end capture");
+  check(cudaGraphInstantiate(&exec, graph, 0) == cudaSuccess, "instantiate");
+  const int launches = std::max(1, iters / kPerGraph);
+  cudaEvent_t start{};
+  cudaEvent_t stop{};
+  cudaEventCreate(&start);
+  cudaEventCreate(&stop);
+  cudaGraphLaunch(exec, stream);
+  cudaEventRecord(start, stream);
+  for (int i = 0; i < launches; ++i) cudaGraphLaunch(exec, stream);
+  cudaEventRecord(stop, stream);
+  cudaEventSynchronize(stop);
+  float ms = 0.0f;
+  cudaEventElapsedTime(&ms, start, stop);
+  cudaEventDestroy(start);
+  cudaEventDestroy(stop);
+  cudaGraphExecDestroy(exec);
+  cudaGraphDestroy(graph);
+  cudaStreamDestroy(stream);
+  cufftDestroy(plan);
+  cudaFree(data);
+  return ms / (launches * kPerGraph);
+}
