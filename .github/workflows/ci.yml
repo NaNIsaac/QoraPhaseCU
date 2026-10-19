@@ -1,0 +1,52 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  cpu:
+    name: CPU (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Ninja
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+      - run: cmake --preset cpu-release -DQORAPHASECU_WERROR=ON
+      - run: cmake --build --preset cpu-release
+      - run: ctest --preset cpu-release
+
+  cuda:
+    name: CUDA compile
+    runs-on: ubuntu-latest
+    container: nvidia/cuda:13.4.3-devel-ubuntu24.04
+    steps:
+      - name: Install build tools
+        run: apt-get update && apt-get install -y --no-install-recommends cmake ninja-build git g++ ca-certificates
+      - uses: actions/checkout@v7
+      # No GPU on the runner: the CUDA tests skip themselves, the CPU tests still run.
+      - run: >
+          cmake --preset cuda-release -DQORAPHASECU_WERROR=ON
+          "-DCMAKE_CUDA_ARCHITECTURES=75;86;89;120"
+      - run: cmake --build --preset cuda-release
+      - run: ctest --preset cuda-release
+
+  python:
+    name: Python wheel (CPU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+      - run: uv build --wheel
+      - run: uv venv
+      - run: uv pip install dist/*.whl pytest
+      - run: .venv/bin/python -m pytest -q python/tests
