@@ -2,6 +2,7 @@
 #include <cmath>
 
 #include "common.cuh"
+#include "device.cuh"
 #include "kernels.cuh"
 
 namespace qpcu::cuda {
@@ -74,27 +75,6 @@ __global__ void update_naive_kernel(float2* x, const float2* p, const std::uint8
 
 // --- fused -------------------------------------------------------------------------
 
-// One element of the modulus projection on the unnormalised forward FFT. `s` is
-// 1/sqrt(n); applied twice it also prepares the unnormalised inverse.
-__device__ __forceinline__ float2 project(float2 w, float a, float s, float& acc) {
-  const float re = w.x * s;
-  const float im = w.y * s;
-  const float mag = sqrtf(re * re + im * im);
-  float target = mag;
-  if (a >= 0.0f) {
-    const float d = mag - a;
-    acc += d * d;
-    target = a;
-  }
-  const float f = target / (mag + kEps) * s;
-  return {re * f, im * f};
-}
-
-__device__ __forceinline__ float2 combine(float2 x, float2 p, std::uint8_t inside,
-                                          UpdateCoefficients c) {
-  return inside ? p : float2{c.a * x.x + c.b * p.x, c.a * x.y + c.b * p.y};
-}
-
 // Grid-stride over pairs of complex values so each thread issues 16-byte loads.
 // Only used for even n, where every start is 16-byte aligned.
 template <class Body>
@@ -117,20 +97,6 @@ __device__ __forceinline__ float block_sum_tree(float v) {
   return buf[0];
 }
 
-__device__ __forceinline__ float block_sum_shuffle(float v) {
-  __shared__ float warp_sums[kThreads / 32];
-  for (int o = 16; o > 0; o >>= 1) v += __shfl_down_sync(0xffffffffu, v, o);
-  const unsigned lane = threadIdx.x % 32;
-  const unsigned warp = threadIdx.x / 32;
-  if (lane == 0) warp_sums[warp] = v;
-  __syncthreads();
-  if (warp == 0) {
-    v = lane < blockDim.x / 32 ? warp_sums[lane] : 0.0f;
-    for (int o = 16; o > 0; o >>= 1) v += __shfl_down_sync(0xffffffffu, v, o);
-  }
-  return v;
-}
-
 template <bool kVector>
 __device__ __forceinline__ float modulus_body(float2* w, const float* signed_amp, std::size_t n) {
   const float s = rsqrtf(static_cast<float>(n));
@@ -141,14 +107,14 @@ __device__ __forceinline__ float modulus_body(float2* w, const float* signed_amp
     for_each_pair(n, [&](std::size_t k) {
       const float4 v = w4[k];
       const float2 a = a2[k];
-      const float2 lo = project({v.x, v.y}, a.x, s, acc);
-      const float2 hi = project({v.z, v.w}, a.y, s, acc);
+      const float2 lo = project({v.x, v.y}, a.x, s, s, acc);
+      const float2 hi = project({v.z, v.w}, a.y, s, s, acc);
       w4[k] = {lo.x, lo.y, hi.x, hi.y};
     });
   } else {
     const std::size_t stride = std::size_t{gridDim.x} * blockDim.x;
     for (std::size_t i = blockIdx.x * std::size_t{blockDim.x} + threadIdx.x; i < n; i += stride) {
-      w[i] = project(w[i], signed_amp[i], s, acc);
+      w[i] = project(w[i], signed_amp[i], s, s, acc);
     }
   }
   return acc;
