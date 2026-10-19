@@ -85,6 +85,9 @@ double modeled_bytes(Variant v) {
     case Variant::naive:
       // scale 16, error 13, modulus 21, scale 16, update 25
       return fft_pair + 16 + 13 + 21 + 16 + 25;
+    case Variant::half:
+      // fp16 complex is 4 bytes: FFT pair 2 * 8, modulus 4 + 4 + 4, update 1 + 4 + 4 + 4
+      return 2 * 8 + 12 + 13;
     default:
       // modulus 8 + 4 + 8, update 1 + 8 + 8 + 8
       return fft_pair + 20 + 25;
@@ -101,7 +104,7 @@ double gbs(double bytes_per_elem, std::size_t n, double ms) {
 
 int main(int argc, char** argv) {
   std::vector<std::string> sizes{"256x256", "1024x1024", "2048x2048", "128x128x128", "256x256x256"};
-  std::vector<std::string> variants{"cpu", "naive", "fused", "graph", "batched"};
+  std::vector<std::string> variants{"cpu", "naive", "fused", "graph", "half", "batched"};
   int iters = 200;
   int starts = 8;
   std::size_t cpu_max = std::size_t{1} << 21;
