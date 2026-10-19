@@ -56,7 +56,9 @@ class CudaSolver final : public Solver {
         n_(numel(shape_)),
         options_(options),
         starts_(options.starts),
-        batch_(options.variant == Variant::batched ? options.starts : 1),
+        batch_(options.variant != Variant::batched ? 1
+               : options.batch                     ? options.batch
+                                                   : options.starts),
         groups_(starts_ / batch_),
         blocks_(cuda::grid_blocks(n_ / 2 + n_ % 2)),
         plan_(fft_dims(shape_).data(), static_cast<int>(shape_.size()), batch_, stream_),

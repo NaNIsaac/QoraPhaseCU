@@ -38,6 +38,9 @@ struct Options {
   Backend backend = Backend::cpu;
   Variant variant = Variant::batched;
   int starts = 1;
+  // Starts per batched cuFFT plan in the batched variant; 0 means all of them.
+  // Must divide `starts`. Lower it when the batch outgrows memory or L2.
+  int batch = 0;
   std::uint64_t seed = 0;
   // Iterations per CUDA graph launch, and the progress interval.
   int sync_every = 10;

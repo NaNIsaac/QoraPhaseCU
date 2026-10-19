@@ -144,9 +144,13 @@ TEST(Cuda, BatchedEqualsLoopedStarts) {
   const Options looped{.backend = Backend::cuda, .variant = Variant::graph, .starts = 4, .seed = 9};
   Options batched = looped;
   batched.variant = Variant::batched;
+  Options pairs = batched;
+  pairs.batch = 2;
   const auto a = reconstruct(p, r, looped);
   const auto b = reconstruct(p, r, batched);
+  const auto c = reconstruct(p, r, pairs);
   for (std::size_t k = 0; k < 4; ++k) {
+    EXPECT_LT(relative_diff(c[k].object, b[k].object), 1e-4f) << k;
     EXPECT_LT(relative_diff(b[k].object, a[k].object), 1e-4f) << k;
     EXPECT_NEAR(b[k].error(), a[k].error(), 1e-4f * a[k].error() + 1e-7f) << k;
     EXPECT_EQ(b[k].support, a[k].support) << k;

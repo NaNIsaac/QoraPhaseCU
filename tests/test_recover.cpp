@@ -72,6 +72,12 @@ TEST(Solver, ProgressFiresEverySyncInterval) {
   EXPECT_EQ(seen, (std::vector<int>{4, 8, 12}));
 }
 
+TEST(Solver, RejectsABatchThatDoesNotDivideStarts) {
+  const auto s = test::triangle({16, 16}, 4);
+  const Problem p = make_problem(s.intensity, s.shape, s.support);
+  EXPECT_THROW(make_solver(p, {.starts = 4, .batch = 3}), std::invalid_argument);
+}
+
 TEST(Solver, RunContinuesFromTheCurrentState) {
   const auto s = test::triangle({32, 32}, 8);
   const Problem p = make_problem(s.intensity, s.shape, s.support);

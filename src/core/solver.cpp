@@ -54,6 +54,9 @@ float Reconstruction::error() const {
 std::unique_ptr<Solver> make_solver(const Problem& problem, const Options& options) {
   if (options.starts < 1) throw std::invalid_argument("starts must be >= 1");
   if (options.sync_every < 1) throw std::invalid_argument("sync_every must be >= 1");
+  if (options.batch < 0 || (options.batch > 0 && options.starts % options.batch != 0)) {
+    throw std::invalid_argument("batch must divide starts");
+  }
   if (problem.shape.size() != 2 && problem.shape.size() != 3) {
     throw std::invalid_argument("problem shape must be 2D or 3D");
   }
