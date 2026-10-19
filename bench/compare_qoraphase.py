@@ -2,7 +2,8 @@
 
 Each engine runs HIO(n) and HIO(2n) on the same input after a warm-up call; the
 difference divided by n is the per-iteration cost without setup, compilation or
-transfers. Needs both packages importable:
+transfers. The best of --repeat such differences is reported, since other load
+on the machine only ever adds time. Needs both packages importable:
 
     python bench/compare_qoraphase.py [--sizes 256x256,1024x1024,128x128x128]
 """
@@ -25,40 +26,42 @@ def problem(shape):
     return intensity, support
 
 
-def time_qoraphase(intensity, support, n):
+def per_iteration_ms(run, n, repeat):
+    run(n)
+    run(2 * n)
+    best = float("inf")
+    for _ in range(repeat):
+        t0 = time.perf_counter()
+        run(n)
+        t1 = time.perf_counter()
+        run(2 * n)
+        t2 = time.perf_counter()
+        best = min(best, ((t2 - t1) - (t1 - t0)) / n * 1e3)
+    return best
+
+
+def time_qoraphase(intensity, support, n, repeat):
     cdi = qp.CDI(intensity, support=support)
 
     def run(k):
         result = cdi.reconstruct(qp.Recipe(qp.HIO(k)))
         result.object.block_until_ready()
 
-    run(n)
-    run(2 * n)
-    t0 = time.perf_counter()
-    run(n)
-    t1 = time.perf_counter()
-    run(2 * n)
-    t2 = time.perf_counter()
-    return ((t2 - t1) - (t1 - t0)) / n * 1e3
+    return per_iteration_ms(run, n, repeat)
 
 
-def time_qoraphasecu(intensity, support, n, backend):
+def time_qoraphasecu(intensity, support, n, backend, repeat):
     def run(k):
         qpc.reconstruct(intensity, support=support, recipe=qpc.Recipe(qpc.HIO(k)), backend=backend)
 
-    run(n)
-    t0 = time.perf_counter()
-    run(n)
-    t1 = time.perf_counter()
-    run(2 * n)
-    t2 = time.perf_counter()
-    return ((t2 - t1) - (t1 - t0)) / n * 1e3
+    return per_iteration_ms(run, n, repeat)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--sizes", default="256x256,1024x1024,128x128x128")
     parser.add_argument("--iters", type=int, default=50)
+    parser.add_argument("--repeat", type=int, default=5)
     args = parser.parse_args()
 
     print(
@@ -73,9 +76,9 @@ def main():
         shape = tuple(int(d) for d in size.split("x"))
         intensity, support = problem(shape)
         n = args.iters
-        jax_ms = time_qoraphase(intensity, support, n)
+        jax_ms = time_qoraphase(intensity, support, n, args.repeat)
         ours = [
-            time_qoraphasecu(intensity, support, n * (20 if b == "cuda" else 1), b)
+            time_qoraphasecu(intensity, support, n * (20 if b == "cuda" else 1), b, args.repeat)
             for b in backends
         ]
         cells = " | ".join(f"{ms:.3f}" for ms in ours)
