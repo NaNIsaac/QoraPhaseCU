@@ -168,6 +168,8 @@ TEST(CudaHalf, RejectsNonPowerOfTwoExtents) {
   const Problem p = make_problem(s.intensity, s.shape, s.support);
   EXPECT_THROW(make_solver(p, {.backend = Backend::cuda, .variant = Variant::half}),
                std::invalid_argument);
+  EXPECT_THROW(make_solver(p, {.backend = Backend::cuda, .variant = Variant::mixed}),
+               std::invalid_argument);
 }
 
 // fp16 keeps about three significant digits, so the iteration stalls near 1e-3
@@ -181,6 +183,35 @@ TEST(CudaHalf, RecoversToItsPrecisionFloor) {
   const auto& best = runs[best_index(runs)];
   EXPECT_LT(best.error(), 3e-3f);
   EXPECT_LT(aligned_error(best.object, s.object, s.shape), 5e-3f);
+}
+
+// The same run as above, but the ER stage runs in fp32 and converges past the
+// fp16 floor.
+TEST(CudaMixed, ConvergesPastTheHalfFloor) {
+  REQUIRE_CUDA();
+  const auto s = test::triangle({64, 64}, 24);
+  const Problem p = make_problem(s.intensity, s.shape, s.support);
+  const auto runs = reconstruct(p, recipe(HIO{400}, ER{100}),
+                                {.backend = Backend::cuda, .variant = Variant::mixed, .starts = 4});
+  const auto& best = runs[best_index(runs)];
+  EXPECT_LT(best.error(), 1e-5f);
+  EXPECT_LT(aligned_error(best.object, s.object, s.shape), 1e-4f);
+}
+
+// ER runs the fp32 path, which differs from graph only by the amplitude scaling.
+TEST(CudaMixed, ErMatchesGraph) {
+  REQUIRE_CUDA();
+  const auto s = test::triangle({64, 32}, 12);
+  const Problem p = make_problem(s.intensity, s.shape, s.support);
+  const Options graph{.backend = Backend::cuda, .variant = Variant::graph, .starts = 2, .seed = 4};
+  Options mixed = graph;
+  mixed.variant = Variant::mixed;
+  const auto a = reconstruct(p, recipe(ER{30}, Shrinkwrap{}, ER{10}), graph);
+  const auto b = reconstruct(p, recipe(ER{30}, Shrinkwrap{}, ER{10}), mixed);
+  for (std::size_t k = 0; k < 2; ++k) {
+    EXPECT_LT(relative_diff(b[k].object, a[k].object), 1e-4f) << k;
+    EXPECT_NEAR(b[k].error(), a[k].error(), 1e-4f * a[k].error()) << k;
+  }
 }
 
 TEST(Cuda, DeviceInfoReportsPeakBandwidth) {

@@ -114,5 +114,12 @@ void to_half(const float2* in, const std::uint8_t* support, __half2* out, std::s
              cudaStream_t stream);
 void to_float(const __half2* in, float2* out, std::size_t n, cudaStream_t stream);
 void magnitude_half(const __half2* x, float2* out, std::size_t n, cudaStream_t stream);
+void to_half(const float2* in, __half2* out, std::size_t n, cudaStream_t stream);
+
+// Mixed precision: x stays fp32 and the update accumulates into it, but also
+// writes the fp16 copy `xh` that the next fp16 forward transform reads.
+void update_mixed(float2* x, const __half2* p, const std::uint8_t* support, std::size_t n,
+                  detail::UpdateCoefficients c, __half2* xh, int* counter, int blocks,
+                  cudaStream_t stream);
 
 }  // namespace qpcu::cuda

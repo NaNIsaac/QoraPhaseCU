@@ -98,7 +98,7 @@ def reconstruct(
     seed: int | None = None,
     support_threshold: float = 0.1,
     backend: Literal["auto", "cpu", "cuda"] = "auto",
-    variant: Literal["naive", "fused", "graph", "batched", "half", "callback"] = "batched",
+    variant: Literal["naive", "fused", "graph", "batched", "half", "callback", "mixed"] = "batched",
     sync_every: int = 10,
 ) -> Reconstruction | Ensemble:
     """Array in, reconstruction out.

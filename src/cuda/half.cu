@@ -55,6 +55,40 @@ __global__ void update_half_kernel(__half2* x, const __half2* p, const std::uint
   if (counter && blockIdx.x == 0 && threadIdx.x == 0) ++*counter;
 }
 
+__global__ void update_mixed_kernel(float2* x, const __half2* p, const std::uint8_t* support,
+                                    std::size_t n, detail::UpdateCoefficients c, __half2* xh,
+                                    int* counter) {
+  const float s = rsqrtf(static_cast<float>(n));
+  auto* x4 = reinterpret_cast<float4*>(x);
+  const auto* p2 = reinterpret_cast<const HalfPair*>(p);
+  auto* xh2 = reinterpret_cast<HalfPair*>(xh);
+  const auto* s2 = reinterpret_cast<const uchar2*>(support);
+  const std::size_t stride = std::size_t{gridDim.x} * blockDim.x;
+  for (std::size_t k = blockIdx.x * std::size_t{blockDim.x} + threadIdx.x; k < n / 2; k += stride) {
+    const uchar2 in = s2[k];
+    const HalfPair pv = p2[k];
+    float2 lo = __half22float2(pv.lo);
+    float2 hi = __half22float2(pv.hi);
+    lo = {lo.x * s, lo.y * s};
+    hi = {hi.x * s, hi.y * s};
+    if (!(in.x && in.y)) {
+      const float4 xv = x4[k];
+      lo = combine({xv.x, xv.y}, lo, in.x, c);
+      hi = combine({xv.z, xv.w}, hi, in.y, c);
+    }
+    x4[k] = {lo.x, lo.y, hi.x, hi.y};
+    xh2[k] = {__float22half2_rn(lo), __float22half2_rn(hi)};
+  }
+  if (counter && blockIdx.x == 0 && threadIdx.x == 0) ++*counter;
+}
+
+__global__ void float_to_half_kernel(const float2* in, __half2* out, std::size_t n) {
+  const std::size_t stride = std::size_t{gridDim.x} * blockDim.x;
+  for (std::size_t i = blockIdx.x * std::size_t{blockDim.x} + threadIdx.x; i < n; i += stride) {
+    out[i] = __float22half2_rn(in[i]);
+  }
+}
+
 __global__ void to_half_kernel(const float2* in, const std::uint8_t* support, __half2* out,
                                std::size_t n) {
   const std::size_t stride = std::size_t{gridDim.x} * blockDim.x;
@@ -93,6 +127,16 @@ void update_half(__half2* x, const __half2* p, const std::uint8_t* support, std:
 void to_half(const float2* in, const std::uint8_t* support, __half2* out, std::size_t n,
              cudaStream_t stream) {
   to_half_kernel<<<grid_blocks(n), kThreads, 0, stream>>>(in, support, out, n);
+}
+
+void update_mixed(float2* x, const __half2* p, const std::uint8_t* support, std::size_t n,
+                  detail::UpdateCoefficients c, __half2* xh, int* counter, int blocks,
+                  cudaStream_t stream) {
+  update_mixed_kernel<<<blocks, kThreads, 0, stream>>>(x, p, support, n, c, xh, counter);
+}
+
+void to_half(const float2* in, __half2* out, std::size_t n, cudaStream_t stream) {
+  float_to_half_kernel<<<grid_blocks(n), kThreads, 0, stream>>>(in, out, n);
 }
 
 void to_float(const __half2* in, float2* out, std::size_t n, cudaStream_t stream) {

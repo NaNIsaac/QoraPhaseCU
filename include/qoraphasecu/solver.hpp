@@ -25,6 +25,7 @@ enum class Variant {
   batched,   // graph, with every start in one batched cuFFT plan
   half,      // graph with x and the wave stored in fp16, fp16 cuFFT; power-of-two sizes
   callback,  // graph with the element-wise work in cuFFT LTO store callbacks
+  mixed,     // half's fp16 wave and transforms for HIO/RAAR, x and ER in fp32
 };
 
 std::string_view to_string(Backend backend);

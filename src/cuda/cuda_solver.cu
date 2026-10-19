@@ -71,10 +71,11 @@ class CudaSolver final : public Solver {
         errors_(static_cast<std::size_t>(starts_)) {
     auto amplitude = to_fft_order<float>(problem.amplitude, shape_);
     const auto mask = to_fft_order<std::uint8_t>(problem.mask, shape_);
-    if (half()) {
+    if (fp16_wave()) {
       for (std::size_t d : shape_) {
         if ((d & (d - 1)) != 0) {
-          throw std::invalid_argument("the half variant needs power-of-two extents (fp16 cuFFT)");
+          throw std::invalid_argument("the " + std::string(to_string(options.variant)) +
+                                      " variant needs power-of-two extents (fp16 cuFFT)");
         }
       }
       // fp16 tops out at 65504; with the peak amplitude at 1 the unnormalised
@@ -108,6 +109,11 @@ class CudaSolver final : public Solver {
     } else {
       // The callback variant writes the new x into the other half of a double buffer.
       x_ = DeviceBuffer<float2>(static_cast<std::size_t>(starts_) * n_ * (callback() ? 2 : 1));
+    }
+    if (mixed()) {
+      xh_ = DeviceBuffer<__half2>(static_cast<std::size_t>(starts_) * n_);
+      wh_ = DeviceBuffer<__half2>(n_);
+      half_plan_ = std::make_unique<cuda::HalfFftPlan>(shape_, stream_);
     }
     w_ = DeviceBuffer<float2>(static_cast<std::size_t>(batch_) * n_);
     const int partial_count =
@@ -162,10 +168,12 @@ class CudaSolver final : public Solver {
                                    n_ * sizeof(float2), cudaMemcpyDeviceToHost, stream_));
       }
       stream_.sync();
-      for (Complex& v : x_host) v *= amplitude_scale_;
     } else {
       QPCU_CHECK(
           cudaMemcpy(x_host.data(), x(0), x_host.size() * sizeof(float2), cudaMemcpyDeviceToHost));
+    }
+    if (fp16_wave()) {
+      for (Complex& v : x_host) v *= amplitude_scale_;
     }
     QPCU_CHECK(cudaMemcpy(s_host.data(), support_.get(), support_.size(), cudaMemcpyDeviceToHost));
     std::vector<Reconstruction> out;
@@ -181,9 +189,11 @@ class CudaSolver final : public Solver {
  private:
   bool device_reduce() const {
     return options_.variant == Variant::graph || options_.variant == Variant::batched || half() ||
-           callback();
+           callback() || mixed();
   }
   bool half() const { return options_.variant == Variant::half; }
+  bool mixed() const { return options_.variant == Variant::mixed; }
+  bool fp16_wave() const { return half() || mixed(); }
   bool callback() const { return options_.variant == Variant::callback; }
 
   // `parity` picks the half of the callback variant's double buffer; 0 otherwise.
@@ -199,7 +209,9 @@ class CudaSolver final : public Solver {
     return errs_.get() + static_cast<std::size_t>(g) * batch_ * capacity_;
   }
 
-  void apply(const ER& o) { iterate(o.n, er_coefficients()); }
+  // ER is where a reconstruction ends, so the mixed variant runs it in fp32 to
+  // get below the fp16 floor.
+  void apply(const ER& o) { iterate(o.n, er_coefficients(), true); }
   void apply(const HIO& o) { iterate(o.n, hio_coefficients(o.beta)); }
   void apply(const RAAR& o) { iterate(o.n, raar_coefficients(o.beta)); }
 
@@ -263,7 +275,12 @@ class CudaSolver final : public Solver {
 #endif
   }
 
-  void iterate(int n, UpdateCoefficients c) {
+  void iterate(int n, UpdateCoefficients c, bool refine = false) {
+    const bool low = mixed() && !refine;
+    if (low) {
+      // An fp32 stage or a shrinkwrap may have changed x since the copy was made.
+      cuda::to_half(x_.get(), xh_.get(), static_cast<std::size_t>(starts_) * n_, stream_);
+    }
     if (callback()) {
       // The update callback reads its coefficients from device memory, so the
       // captured graphs stay valid when the algorithm changes.
@@ -285,7 +302,8 @@ class CudaSolver final : public Solver {
           case Variant::batched:
           case Variant::half:
           case Variant::callback:
-            graph(g, len, c).launch(stream_);
+          case Variant::mixed:
+            graph(g, len, c, low).launch(stream_);
             break;
         }
       }
@@ -327,8 +345,16 @@ class CudaSolver final : public Solver {
     record_host_errors(g, static_cast<std::size_t>(blocks_));
   }
 
-  void step_device(int g, UpdateCoefficients c, int parity) {
+  void step_device(int g, UpdateCoefficients c, int parity, bool low) {
     int* counter = counters_.get() + g;
+    if (low) {
+      __half2* w = wh_.get();
+      half_plan_->forward(xh(g), w);
+      cuda::modulus_half(w, signed_amp_.get(), n_, errs(g), counter, blocks_, stream_);
+      half_plan_->inverse(w, w);
+      cuda::update_mixed(x(g), w, support(g), n_, c, xh(g), counter, blocks_, stream_);
+      return;
+    }
     if (callback()) {
       float2* w = w_.get();
       modulus_plan_->forward(x(g, parity), w);
@@ -362,11 +388,11 @@ class CudaSolver final : public Solver {
 
   float to_error(double num) const { return static_cast<float>(std::sqrt(num / (energy_ + kEps))); }
 
-  const CudaGraph& graph(int g, int len, UpdateCoefficients c) {
-    const auto key = std::make_tuple(g, len, c.a, c.b, parity_);
+  const CudaGraph& graph(int g, int len, UpdateCoefficients c, bool low) {
+    const auto key = std::make_tuple(g, len, c.a, c.b, parity_, low);
     if (auto it = graphs_.find(key); it != graphs_.end()) return *it->second;
     QPCU_CHECK(cudaStreamBeginCapture(stream_, cudaStreamCaptureModeThreadLocal));
-    for (int i = 0; i < len; ++i) step_device(g, c, (parity_ + i) & 1);
+    for (int i = 0; i < len; ++i) step_device(g, c, (parity_ + i) & 1, low);
     cudaGraph_t captured{};
     QPCU_CHECK(cudaStreamEndCapture(stream_, &captured));
     return *graphs_.emplace(key, std::make_unique<CudaGraph>(captured)).first->second;
@@ -438,7 +464,7 @@ class CudaSolver final : public Solver {
   cuda::UpdateCallbackInfo update_host_{};
   DeviceBuffer<float> slots_;
   int parity_ = 0;
-  std::map<std::tuple<int, int, float, float, int>, std::unique_ptr<CudaGraph>> graphs_;
+  std::map<std::tuple<int, int, float, float, int, bool>, std::unique_ptr<CudaGraph>> graphs_;
   int capacity_ = 0;
   int iteration_ = 0;
   int run_iterations_ = 0;
