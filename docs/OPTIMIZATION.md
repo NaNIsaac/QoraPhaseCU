@@ -7,7 +7,7 @@ benchmark compares them on the same build. All numbers below come from
 ```
 GPU: NVIDIA GeForce RTX 5070 (sm_120, 11.9 GiB, L2 48 MiB), peak DRAM bandwidth 672 GB/s
 CPU: AMD Ryzen 5 7500F 6-Core Processor (6 cores, 12 threads)
-Windows 11, CUDA 13.4, MSVC 14.44, Release build
+Windows 11, CUDA 13.4 (cuFFT 12.4, nvJitLink and NVRTC 13.4), MSVC 14.44, Release build
 ```
 
 The peak is `2 x memory clock x bus width` from the device attributes. CUDA 13
@@ -18,11 +18,15 @@ removed `memoryClockRate` from `cudaDeviceProp`, so the clock comes from
 The workload is HIO on random data with a box support covering the central half
 of each axis; timing does not depend on the data. Times are milliseconds per
 iteration, after a warm-up run of the same length so that plans and CUDA graphs
-already exist.
+already exist. Another project's benchmark shares this GPU and CPU; one full run
+that overlapped with it was discarded (its CPU column read twice the times
+below), and every run reported here was taken with no other benchmark process
+running.
 
-**Nsight Compute was not used.** The CUDA toolkit on this machine was installed
-without admin rights from conda-forge and does not include `ncu`. Bandwidth here
-is therefore *modeled*, not measured: bytes per element per iteration are
+**Bandwidth is modeled, not measured.** Nsight Compute 2026.3.1 is installed,
+but `ncu` stops with `ERR_NVGPUCTRPERM`: on this Windows machine the GPU
+performance counters are restricted to administrators, and that setting was not
+changed. So instead of measured DRAM throughput, bytes per element per iteration are
 counted from the loads and stores each element-wise kernel issues, plus one read
 and one write of the array per FFT (16 bytes per element for complex64). cuFFT
 takes more passes than that for large transforms, so the FFT part of the model
@@ -33,47 +37,48 @@ is a lower bound.
 | naive | 32 (FFTs) + 91 (five element-wise kernels) = 123 |
 | fused, graph, batched | 32 (FFTs) + 45 (two element-wise kernels) = 77 |
 | half | 16 (fp16 FFTs) + 25 (two element-wise kernels) = 41 |
+| callback | 32 (FFTs) + 13 (amplitude, support and old x read in the callbacks) = 45 |
 
 ## Results
 
 Single start. ms per iteration, modeled GB/s in parentheses.
 
-| size | cuFFT pair | fp16 cuFFT pair | cpu | naive | fused | graph | half |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| 256^2 | 0.007 (285) | 0.007 (157) | 0.66 | 0.127 (63) | 0.105 (48) | 0.010 (487) | 0.010 (275) |
-| 1024^2 | 0.043 (775) | 0.100 (168) | 10.86 | 0.182 (707) | 0.139 (580) | 0.062 (1306) | 0.113 (382) |
-| 2048^2 | 0.184 (730) | 0.367 (183) | - | 0.744 (694) | 0.523 (617) | 0.446 (723) | 0.451 (381) |
-| 128^3 | 0.082 (819) | 0.060 (558) | 25.30 | 0.278 (927) | 0.179 (901) | 0.111 (1458) | 0.086 (998) |
-| 256^3 | 2.764 (194) | 1.421 (189) | - | 5.576 (370) | 4.184 (309) | 4.108 (314) | 2.296 (300) |
+| size | cuFFT pair | fp16 cuFFT pair | cpu | naive | fused | graph | half | callback |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 256^2 | 0.008 (279) | 0.006 (163) | 0.52 | 0.135 (60) | 0.102 (50) | 0.011 (477) | 0.010 (282) | 0.019 (159) |
+| 1024^2 | 0.043 (778) | 0.103 (162) | 7.23 | 0.194 (666) | 0.139 (579) | 0.059 (1376) | 0.111 (389) | 0.070 (672) |
+| 2048^2 | 0.180 (746) | 0.370 (181) | - | 0.742 (695) | 0.527 (613) | 0.452 (714) | 0.448 (384) | 0.519 (363) |
+| 128^3 | 0.081 (824) | 0.060 (562) | 16.24 | 0.287 (900) | 0.191 (845) | 0.113 (1430) | 0.084 (1028) | 0.143 (659) |
+| 256^3 | 2.766 (194) | 1.417 (189) | - | 5.581 (370) | 4.184 (309) | 4.115 (314) | 2.299 (299) | 3.251 (232) |
 
 "cuFFT pair" is one forward and one inverse in-place C2C transform replayed from
 a CUDA graph: the floor for any variant that keeps cuFFT. The CPU column is the
-reference backend (pocketfft on all threads, element-wise loops on one thread),
-skipped above 2^21 elements.
+reference backend (pocketfft on all threads, element-wise loops on OpenMP
+threads), skipped above 2^21 elements.
 
 Eight starts. ms per iteration per start.
 
 | size | graph, looped starts | batched, all 8 in one plan | batched, 2 per plan |
 |---|---:|---:|---:|
-| 256^2 | 0.011 | 0.004 | 0.007 |
-| 1024^2 | 0.061 | 0.191 | 0.057 |
-| 2048^2 | 0.456 | 0.831 | 0.817 |
-| 128^3 | 0.119 | 0.271 | 0.191 |
-| 256^3 | 4.079 | 4.156 | 4.159 |
+| 256^2 | 0.010 | 0.004 | 0.007 |
+| 1024^2 | 0.062 | 0.191 | 0.056 |
+| 2048^2 | 0.446 | 0.830 | 0.817 |
+| 128^3 | 0.119 | 0.270 | 0.190 |
+| 256^3 | 4.109 | 4.164 | 4.167 |
 
 Progress reporting (graph variant, 256^2): a host read-back every N iterations.
 
 | N | ms per iteration |
 |---:|---:|
-| 1 | 0.0655 |
-| 10 | 0.0148 |
-| 100 | 0.0108 |
+| 1 | 0.0603 |
+| 10 | 0.0152 |
+| 100 | 0.0106 |
 
-A second full run reproduced every row to within a few percent except the
-host-synchronised ones at 256^2, which move between runs (fused at 256^2 read
-0.178 ms in one run and 0.105 ms in the other; the N = 10 progress row read 0.059
-ms in an earlier run). Those rows are bounded by Windows scheduling of the
-host-device round trip, not by the GPU.
+Repeated runs reproduce the GPU rows to within a few percent, except the
+host-synchronised ones at 256^2, which move between runs (fused at 256^2 has
+read 0.102, 0.105 and 0.178 ms; the N = 10 progress row once read 0.059 ms).
+Those rows are bounded by Windows scheduling of the host-device round trip, not
+by the GPU. The CPU column times only 10 iterations and moves by about 10%.
 
 ## Where the time goes
 
@@ -83,16 +88,17 @@ kernels and launches. At 256^3 the arrays (134 MB each) are far larger than the
 
 | 256^3 | total | minus cuFFT pair | element-wise bytes | effective bandwidth |
 |---|---:|---:|---:|---:|
-| naive | 5.576 | 2.812 | 91 x 16.8M = 1.53 GB | 543 GB/s (81% of peak) |
-| fused | 4.184 | 1.420 | 45 x 16.8M = 0.75 GB | 532 GB/s (79%) |
-| graph | 4.108 | 1.344 | 0.75 GB | 562 GB/s (84%) |
-| half | 2.296 | 0.875 | 25 x 16.8M = 0.42 GB | 479 GB/s (71%) |
+| naive | 5.581 | 2.815 | 91 x 16.8M = 1.53 GB | 542 GB/s (81% of peak) |
+| fused | 4.184 | 1.418 | 45 x 16.8M = 0.75 GB | 532 GB/s (79%) |
+| graph | 4.115 | 1.349 | 0.75 GB | 560 GB/s (83%) |
+| half | 2.299 | 0.882 (minus the fp16 pair) | 25 x 16.8M = 0.42 GB | 476 GB/s (71%) |
 
 The element-wise kernels already run near the bandwidth limit even in the naive
 variant; what changes between steps is how many bytes they have to move and how
 much of the iteration is spent waiting on the host. Once the element-wise part
-is at 84% of peak, cuFFT is two thirds of the iteration at 256^3, and the only
-large remaining lever is the FFT itself.
+is at 83% of peak, cuFFT is two thirds of the iteration at 256^3, and the
+remaining levers are the FFT's precision (step 5) or folding the element-wise
+work into the FFT's own passes (step 6).
 
 At 1024^2 and 128^3 one complex array is 8 MB and 16 MB, so the whole working
 set (x, wave, amplitude, support) fits in L2 and the modeled bandwidth exceeds
@@ -113,7 +119,7 @@ operation, one element per thread, no grid-stride loop:
 
 It is correct and matches the CPU reference, but every iteration ends in a
 host-device round trip, and the wave is read or written five times outside the
-FFTs. At 256^2 an iteration costs 0.127 ms, 18 times the 0.007 ms the two FFTs
+FFTs. At 256^2 an iteration costs 0.135 ms, 17 times the 0.008 ms the two FFTs
 need: the GPU mostly waits for the host.
 
 ## Step 2: fused element-wise kernels
@@ -135,8 +141,8 @@ kernel, and the support projection plus HIO/RAAR/ER update another:
   pair are inside the support.
 
 Element-wise traffic drops from 91 to 45 bytes per element. At 256^3 that is
-1.39 ms less per iteration (5.576 to 4.184 ms, 25%), which is what moving 0.78 GB
-less at about 540 GB/s predicts. At 256^2 it barely matters (0.127 to 0.105 ms)
+1.40 ms less per iteration (5.581 to 4.184 ms, 25%), which is what moving 0.77 GB
+less at about 540 GB/s predicts. At 256^2 it barely matters (0.135 to 0.102 ms)
 because the host round trip still dominates.
 
 ## Step 3: on-device reduction, sparse synchronisation, CUDA graphs
@@ -155,10 +161,10 @@ because the host round trip still dominates.
   `sync_every` iterations, and copies the whole history once at the end of
   `run()`.
 
-At 256^2 the iteration falls from 0.105 to 0.010 ms, 10 times faster and within
+At 256^2 the iteration falls from 0.102 to 0.011 ms, 9 times faster and within
 0.003 ms of the bare FFT pair. The progress table shows the cost of going back
-to the host: reading the latest error after every iteration costs 0.0655 ms per
-iteration, every 10 iterations 0.0148 ms, every 100 iterations 0.0108 ms. At
+to the host: reading the latest error after every iteration costs 0.0603 ms per
+iteration, every 10 iterations 0.0152 ms, every 100 iterations 0.0106 ms. At
 256^3, where a single iteration takes 4 ms, launch and sync overhead was already
 negligible and the graph variant gains only 2% over fused.
 
@@ -172,14 +178,14 @@ and looped starts give the same objects, errors and supports.
 
 It helps only where the GPU is under-occupied:
 
-- 256^2: 8 starts in one plan take 0.004 ms per start against 0.011 ms looped, 2.8
+- 256^2: 8 starts in one plan take 0.004 ms per start against 0.010 ms looped, 2.5
   times faster. Each 256^2 transform alone cannot fill the GPU.
-- 1024^2, 2048^2, 128^3: batching is 1.8 to 3.1 times *slower*. Looped, one
+- 1024^2, 2048^2, 128^3: batching is 1.9 to 3.1 times *slower*. Looped, one
   start's working set fits in the 48 MiB L2 and every pass is served from cache;
   batched, eight starts' arrays (64 MB of x alone at 1024^2) do not, and the same
   passes go to DRAM. Two starts per plan at 1024^2 (16 MB of x) still fit and
-  are slightly faster than the loop (0.057 vs 0.061 ms).
-- 256^3: no difference (4.079 vs 4.156 ms); a single start already saturates
+  are slightly faster than the loop (0.056 vs 0.062 ms).
+- 256^3: no difference (4.109 vs 4.164 ms); a single start already saturates
   DRAM.
 
 So `Options::batch` exists to size the batch to the cache, the same knob as
@@ -197,11 +203,11 @@ fp16 subnormals.
 
 Speed depends entirely on how well cuFFT handles fp16 for the shape:
 
-- 256^3: the fp16 FFT pair takes 1.421 ms against 2.764 ms, and the iteration
-  2.296 ms against 4.108 ms: 1.8 times faster.
-- 1024^2 and 2048^2: the fp16 FFT pair is about twice as *slow* as fp32 (0.100
-  vs 0.043 ms, 0.367 vs 0.184 ms), and the variant is no faster or slower than
-  graph.
+- 256^3: the fp16 FFT pair takes 1.417 ms against 2.766 ms, and the iteration
+  2.299 ms against 4.115 ms: 1.8 times faster.
+- 1024^2 and 2048^2: the fp16 FFT pair is about twice as *slow* as fp32 (0.103
+  vs 0.043 ms, 0.370 vs 0.180 ms), and the variant is slower than graph at
+  1024^2 (0.111 vs 0.059 ms) and level at 2048^2.
 
 Accuracy, measured with the known support (HIO 400 + ER 100, best of 8 starts)
 and with the default recipe from an autocorrelation support:
@@ -219,38 +225,158 @@ it is a floor, not a slower convergence; the test `CudaHalf.RecoversToItsPrecisi
 pins it. Mixed use (fp16 for the early, exploratory iterations, fp32 for the
 final ER) would keep the speed without the floor; it is not implemented.
 
+## Step 6: cuFFT LTO callbacks
+
+`Variant::callback` moves the element-wise work into cuFFT's own passes. cuFFT
+can call a device function on every element a transform stores. On Windows only
+the LTO form of these callbacks exists: src/cuda/callbacks.cu is compiled to
+LTO-IR (`-gencode arch=compute_XX,code=lto_XX`, cmake/cufft_callbacks.cmake),
+embedded in the library as a byte array, and handed to `cufftXtSetJITCallback`
+before the plan is made. cuFFT then generates its kernels with NVRTC and links
+the callbacks in with nvJitLink, so both libraries must be present at run time;
+without NVRTC, plan creation fails with `CUFFT_MISSING_DEPENDENCY`. The
+callbacks must have C++ linkage: declared `extern "C"`, they make plan creation
+fail with `CUFFT_NVJITLINK_FAILURE`. CMake leaves the variant out when the
+toolkit's cufftXt.h has no `cufftXtSetJITCallback` (`QORAPHASECU_CUFFT_LTO`).
+
+A callback belongs to a plan, not to a direction, so the variant makes two more
+plans and an iteration is three graph nodes:
+
+1. forward FFT with a store callback that applies the modulus projection to each
+   element as cuFFT writes it, and adds the element's error term with an
+   `atomicAdd` into one of 4096 float slots (slot = offset mod 4096);
+2. a one-block kernel that sums the slots into the error history and clears them;
+3. inverse FFT with a store callback that writes the updated object: P_M x
+   inside the support, a x + b P_M x outside. It writes one half of a double
+   buffer and reads the old x from the other half, since cuFFT does not promise
+   to leave its output buffer untouched before the final store. The halves swap
+   every iteration, and the CUDA graphs are cached per starting half.
+
+The update coefficients sit in device memory that the callback reads, so a
+change of algorithm is one small copy rather than new plans. Modeled traffic is
+45 bytes per element against 77 for `graph`.
+
+| size | graph | callback | change |
+|---|---:|---:|---:|
+| 256^2 | 0.011 | 0.019 | +73% |
+| 1024^2 | 0.059 | 0.070 | +19% |
+| 2048^2 | 0.452 | 0.519 | +15% |
+| 128^3 | 0.113 | 0.143 | +27% |
+| 256^3 | 4.115 | 3.251 | -21% |
+
+It wins only at 256^3, by 0.86 ms per iteration, in fp32. The fp16 variant is
+faster still there (2.299 ms) but stops at its 1e-3 floor; the callback variant
+keeps float precision and passes the same CPU comparison tests as `graph`.
+Everywhere else it is slower than the separate kernels.
+
+To see why, the callbacks were cut down one piece at a time in throw-away
+builds, each timed in one run with `graph` and the plain cuFFT pair alongside
+(ms per iteration):
+
+| callbacks | 1024^2 | 2048^2 | 128^3 | 256^3 |
+|---|---:|---:|---:|---:|
+| full (as shipped) | 0.067 | 0.515 | 0.139 | 3.250 |
+| without the error atomics | 0.063 | 0.514 | 0.137 | 3.236 |
+| also without the update's loads (store P_M x) | 0.056 | 0.387 | 0.104 | 2.967 |
+| copy only, plus the one-block kernel | 0.051 | 0.304 | 0.097 | 2.816 |
+| plain cuFFT pair, no callbacks | 0.043 | 0.182 | 0.081 | 2.765 |
+| modulus callback only, update as a kernel | 0.065 | 0.512 | 0.160 | 3.653 |
+
+- **The error sum costs almost nothing** (0.014 ms at 256^3). A callback sees a
+  single element, so there is no per-thread partial to reduce. The first
+  version summed across the active lanes with cooperative groups and issued one
+  atomic per warp into 256 slots; in two early runs, not checked for other load,
+  it was slower (3.45 against 3.26 ms at 256^3) than plain atomics spread over
+  4096 slots.
+- **Callbacks slow cuFFT down by themselves.** Copy-only callbacks cost 0.05 ms
+  over the plain pair at 256^3, but 0.016 ms (20%) at 128^3 and 0.12 ms (67%)
+  at 2048^2.
+- **The update's two loads are expensive at 2048^2.** The support byte and the
+  old x (9 bytes per element, 38 MB) add 0.13 ms there, about 300 GB/s, against
+  0.27 ms for 151 MB (560 GB/s) at 256^3. A store callback runs in the order in
+  which cuFFT's last pass writes, and for the 2D transforms that order is
+  apparently not contiguous across a warp, so the one-byte support loads waste
+  most of each memory transaction. Without profiler counters this is the
+  explanation that fits the numbers, not a measurement.
+- **The L2 hides what the callbacks save.** At 1024^2, 2048^2 and 128^3 the
+  separate kernels of `graph` read the wave back from the 48 MiB L2 (modeled
+  1376 and 1430 GB/s at 1024^2 and 128^3), so removing their passes saves
+  little, while the costs above are paid at every size. At 256^3 every pass goes
+  to DRAM, the 32 bytes per element that the callbacks avoid are worth about
+  0.8 ms, and the overhead is small.
+- Fusing only the modulus is the worst of both: it pays the callback overhead
+  on the forward plan and still runs the update kernel.
+
+The linking happens when the plans are made. Solver construction, first solver
+of each size in the process (ms):
+
+| size | graph | callback |
+|---|---:|---:|
+| 256^2 | 2 | 413 |
+| 1024^2 | 12 | 451 |
+| 2048^2 | 41 | 542 |
+| 128^3 | 22 | 346 |
+| 256^3 | 134 | 249 |
+
+An earlier run of the same benchmark gave 159 to 362 ms for the callback
+column, so this cost varies. At 256^3 it is paid back after 130 to 250
+iterations; at the other sizes, where the variant is slower anyway, never.
+
 ## Not done
 
-- **cuFFT callbacks.** Fusing the update into the inverse FFT's store callback
-  would remove the wave's write and re-read (about 16 of 77 bytes per element).
-  On Windows only LTO callbacks (`cufftXtSetJITCallback`) exist, and they need
-  nvJitLink, which the toolkit on this machine does not have. Not attempted.
 - **R2C transforms.** The object is complex, so there is no Hermitian symmetry to
   exploit in the iteration. Only the shrinkwrap blur of |x| is real and could use
   R2C; it runs once per 50 iterations in the default recipe.
 - **Bit-packed support.** The support is 1 of the 45 element-wise bytes, so
-  packing it into bits would save under 2%.
+  packing it into bits would save under 2%. In the callback variant, where the
+  support load looks expensive at 2048^2, it might matter more; not tried.
+- **Measured bandwidth.** See the note on Nsight Compute at the top.
 
-## Against QoraPhase (JAX)
+## CPU reference and QoraPhase (JAX)
+
+The CPU reference runs its element-wise loops (modulus with its error sum,
+update, shrinkwrap, random start) under `#pragma omp parallel for`; pocketfft
+already used all hardware threads for the transforms. MSVC implements OpenMP
+2.0, which is enough for these loops with a signed index. The magnitude is
+`sqrt(norm(z))`, the expression the CUDA kernels use, instead of `std::abs`,
+which goes through `hypot`. Without OpenMP (`QORAPHASECU_OPENMP=OFF`, or a
+compiler without it) the loops run on one thread.
+
+`qpcu_bench --variants cpu`, single runs of 10 iterations, ms per iteration:
+
+| size | loops on one thread (`OMP_NUM_THREADS=1`) | loops on OpenMP threads |
+|---|---:|---:|
+| 256^2 | 0.60 | 0.49 |
+| 1024^2 | 9.77 | 7.66 |
+| 2048^2 | 37.11 | 32.03 |
+| 128^3 | 22.71 | 17.57 |
+| 256^3 | 165.77 | 157.34 |
+
+The gain is 5 to 23%: the transforms take most of the time. Setting the OpenMP
+threads to the 6 physical cores, or `OMP_WAIT_POLICY=PASSIVE` so that idle
+OpenMP threads do not spin while pocketfft's threads work, moved the times by
+less than the run-to-run spread.
 
 `bench/compare_qoraphase.py` runs HIO through both Python APIs on the same input
 and takes the difference between n and 2n iterations, so compilation, setup and
-transfers drop out. QoraPhase at commit bde11f4. JAX publishes CUDA wheels for
-Linux only, so on this Windows machine JAX ran on the CPU; there is no JAX GPU
-number to compare against.
+transfers drop out. The best of five such differences is reported, because
+other load on the machine only ever adds time; single differences moved by up
+to a factor of 1.8 between runs. QoraPhase at commit bde11f4. JAX publishes
+CUDA wheels for Linux only, so on this Windows machine JAX ran on the CPU; there
+is no JAX GPU number to compare against.
 
 ```
 JAX 0.12.0 (cpu, cpu) | Python 3.14.5 | AMD64 Family 25 Model 97 Stepping 2, AuthenticAMD
 ```
 
-| size | QoraPhase JAX (CPU) | QoraPhaseCU cpu | QoraPhaseCU cuda (batched variant, 1 start) |
-|---|---:|---:|---:|
-| 256^2 | 0.539 | 0.771 | 0.009 |
-| 1024^2 | 7.411 | 13.893 | 0.057 |
-| 128^3 | 21.617 | 24.478 | 0.111 |
+| size | QoraPhase JAX (CPU) | QoraPhaseCU cpu, OpenMP | QoraPhaseCU cpu, `OMP_NUM_THREADS=1` | QoraPhaseCU cuda (batched variant, 1 start) |
+|---|---:|---:|---:|---:|
+| 256^2 | 0.406 | 0.439 | 0.487 | 0.009 |
+| 1024^2 | 5.003 | 6.321 | 7.920 | 0.058 |
+| 128^3 | 14.447 | 14.140 | 18.449 | 0.113 |
 
-ms per HIO iteration. The CPU reference is slower than XLA on the CPU: its
-element-wise loops are single-threaded and not vectorised, by design, since it
-exists to check the GPU path. The CUDA backend is 60 to 195 times faster than
+ms per HIO iteration. With its loops threaded, the CPU reference is 8% slower
+than XLA at 256^2, 26% slower at 1024^2 and level at 128^3; with one-thread
+loops it is 20 to 58% slower. The CUDA backend is 45 to 128 times faster than
 JAX on this CPU; against JAX on a GPU the gap would be far smaller, and that was
 not measured.

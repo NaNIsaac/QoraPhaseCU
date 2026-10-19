@@ -16,6 +16,7 @@ src/cuda/              CUDA backend on cuFFT
   cuda_solver.cu       CudaSolver: buffers, plans, the variants, CUDA graphs
   kernels.cu           fp32 kernels (naive, fused, shrinkwrap, setup)
   half.cu              fp16-storage kernels
+  callbacks.cu         cuFFT LTO store callbacks, compiled to LTO-IR and embedded
   device.cuh           device helpers shared by both kernel files
   common.cuh           error checks, RAII device buffer, stream, cuFFT plans
 python/                nanobind module _core and the qoraphasecu package
@@ -98,6 +99,15 @@ the round trip completes; graph, batched and half accumulate on the device and
 the history is copied once per `run()`. A captured graph bakes in the addresses
 of its error slots, so the graph cache is cleared whenever the recipe length
 (and with it the layout of the error array) changes.
+
+The callback variant keeps two extra cuFFT plans whose store callbacks do the
+modulus projection and the update (src/cuda/callbacks.cu). x is then a double
+buffer: the inverse transform writes the new x into one half while its callback
+reads the old x from the other, and `parity_` records which half is current.
+Graphs are cached per starting half as well. The callbacks are built by
+cmake/cufft_callbacks.cmake as a separate nvcc invocation that emits LTO-IR for
+each entry of `CMAKE_CUDA_ARCHITECTURES`, and cmake/embed.cmake turns the
+fatbin into a C++ byte array linked into the library.
 
 Shrinkwrap runs on the device for every variant: magnitude into the complex work
 buffer, forward FFT, Gaussian transfer and 1/n in one kernel, inverse FFT, a

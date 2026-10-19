@@ -9,8 +9,9 @@ intensity with ER, HIO, RAAR, shrinkwrap, detwinning and multiple random starts,
 following QoraPhase operator for operator. It has a CPU reference backend and a
 CUDA backend behind the same C++ API, and a Python API shaped like
 `qoraphase.reconstruct`. The CUDA backend is also an optimization study: each
-step from a naive port to batched, graph-launched, fp16-storage kernels is kept
-as a selectable variant and measured in [docs/OPTIMIZATION.md](docs/OPTIMIZATION.md).
+step from a naive port to batched, graph-launched, fp16-storage kernels and cuFFT
+LTO callbacks is kept as a selectable variant and measured in
+[docs/OPTIMIZATION.md](docs/OPTIMIZATION.md).
 
 ![Simulated object, its diffraction intensity, and the reconstruction](https://raw.githubusercontent.com/NaNIsaac/QoraPhaseCU/main/docs/reconstruction.png)
 
@@ -113,35 +114,39 @@ pixels.
 | `graph` | warp-shuffle error reduction on the device, iterations replayed from a CUDA graph |
 | `batched` (default) | `graph` with `Options::batch` starts per batched cuFFT plan |
 | `half` | `graph` with x and the wave in fp16 and fp16 cuFFT; error floor near 1e-3, power-of-two sizes |
+| `callback` | `graph` with the modulus projection and the update in cuFFT LTO store callbacks; needs nvJitLink and NVRTC at run time |
 
 HIO, single start, ms per iteration (RTX 5070, AMD Ryzen 5 7500F, Windows 11,
 CUDA 13.4; `qpcu_bench --iters 200`):
 
-| size | CPU reference | naive | fused | graph | half |
-|---|---:|---:|---:|---:|---:|
-| 256^2 | 0.66 | 0.127 | 0.105 | 0.010 | 0.010 |
-| 1024^2 | 10.86 | 0.182 | 0.139 | 0.062 | 0.113 |
-| 2048^2 | - | 0.744 | 0.523 | 0.446 | 0.451 |
-| 128^3 | 25.30 | 0.278 | 0.179 | 0.111 | 0.086 |
-| 256^3 | - | 5.576 | 4.184 | 4.108 | 2.296 |
+| size | CPU reference | naive | fused | graph | half | callback |
+|---|---:|---:|---:|---:|---:|---:|
+| 256^2 | 0.52 | 0.135 | 0.102 | 0.011 | 0.010 | 0.019 |
+| 1024^2 | 7.23 | 0.194 | 0.139 | 0.059 | 0.111 | 0.070 |
+| 2048^2 | - | 0.742 | 0.527 | 0.452 | 0.448 | 0.519 |
+| 128^3 | 16.24 | 0.287 | 0.191 | 0.113 | 0.084 | 0.143 |
+| 256^3 | - | 5.581 | 4.184 | 4.115 | 2.299 | 3.251 |
 
-At 256^3 the element-wise kernels of `graph` run at an estimated 84% of the
-672 GB/s DRAM peak and cuFFT takes two thirds of the iteration. Batching starts
-into one plan is 2.8 times faster per start at 256^2 and up to 3 times slower at
-1024^2, where it pushes the working set out of the 48 MiB L2. The derivations,
-the multi-start and fp16 accuracy tables, and what was not done are in
+At 256^3 the element-wise kernels of `graph` run at an estimated 83% of the
+672 GB/s DRAM peak and cuFFT takes two thirds of the iteration. Folding them
+into cuFFT callbacks saves 21% there in full precision, but is 15 to 73% slower
+at the sizes whose working set fits the 48 MiB L2. Batching starts into one
+plan is 2.5 times faster per start at 256^2 and up to 3 times slower at 1024^2,
+where it pushes the working set out of the L2. The derivations, the
+multi-start and fp16 accuracy tables, and what was not done are in
 [docs/OPTIMIZATION.md](docs/OPTIMIZATION.md). Bandwidth there is modeled from
-the bytes each kernel moves; Nsight Compute was not available.
+the bytes each kernel moves; Nsight Compute could not read the GPU counters on
+this machine.
 
-Against QoraPhase on the same machine (HIO, ms per iteration,
+Against QoraPhase on the same machine (HIO, ms per iteration, best of five,
 `bench/compare_qoraphase.py`). JAX ships CUDA wheels for Linux only, so JAX ran
 on the CPU here:
 
-| size | QoraPhase, JAX 0.12 CPU | QoraPhaseCU CPU reference | QoraPhaseCU CUDA |
+| size | QoraPhase, JAX 0.12 CPU | QoraPhaseCU CPU reference (OpenMP) | QoraPhaseCU CUDA |
 |---|---:|---:|---:|
-| 256^2 | 0.539 | 0.771 | 0.009 |
-| 1024^2 | 7.411 | 13.893 | 0.057 |
-| 128^3 | 21.617 | 24.478 | 0.111 |
+| 256^2 | 0.406 | 0.439 | 0.009 |
+| 1024^2 | 5.003 | 6.321 | 0.058 |
+| 128^3 | 14.447 | 14.140 | 0.113 |
 
 ## What this does not do
 
