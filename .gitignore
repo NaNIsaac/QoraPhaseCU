@@ -1,0 +1,11 @@
+build/
+out/
+dist/
+wheels/
+__pycache__/
+*.py[oc]
+*.egg-info
+.venv
+.cache/
+CMakeUserPresets.json
+*.ncu-rep
