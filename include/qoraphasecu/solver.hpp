@@ -23,6 +23,7 @@ enum class Variant {
   fused,    // fused element-wise kernels, error partials still summed on the host
   graph,    // on-device error reduction, iterations replayed from a CUDA graph
   batched,  // graph, with every start in one batched cuFFT plan
+  half,     // graph with x and the wave stored in fp16, fp16 cuFFT; power-of-two sizes
 };
 
 std::string_view to_string(Backend backend);

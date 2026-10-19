@@ -70,6 +70,7 @@ endif()
 if(QORAPHASECU_CUDA)
   target_sources(qoraphasecu PRIVATE
     src/cuda/cuda_solver.cu
+    src/cuda/half.cu
     src/cuda/kernels.cu
     src/cuda/operators.cu)
   target_compile_definitions(qoraphasecu PUBLIC QORAPHASECU_HAS_CUDA)

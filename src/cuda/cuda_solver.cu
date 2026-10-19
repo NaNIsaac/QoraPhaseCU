@@ -63,8 +63,20 @@ class CudaSolver final : public Solver {
         blocks_(cuda::grid_blocks(n_ / 2 + n_ % 2)),
         plan_(fft_dims(shape_).data(), static_cast<int>(shape_.size()), batch_, stream_),
         errors_(static_cast<std::size_t>(starts_)) {
-    const auto amplitude = to_fft_order<float>(problem.amplitude, shape_);
+    auto amplitude = to_fft_order<float>(problem.amplitude, shape_);
     const auto mask = to_fft_order<std::uint8_t>(problem.mask, shape_);
+    if (half()) {
+      for (std::size_t d : shape_) {
+        if ((d & (d - 1)) != 0) {
+          throw std::invalid_argument("the half variant needs power-of-two extents (fp16 cuFFT)");
+        }
+      }
+      // fp16 tops out at 65504; with the peak amplitude at 1 the unnormalised
+      // forward FFT stays below sqrt(n).
+      const float peak = std::ranges::max(amplitude);
+      amplitude_scale_ = peak > 0.0f ? peak : 1.0f;
+      for (float& a : amplitude) a /= amplitude_scale_;
+    }
     std::vector<float> signed_amp(n_);
     double energy = 0.0;
     for (std::size_t i = 0; i < n_; ++i) {
@@ -83,7 +95,13 @@ class CudaSolver final : public Solver {
     support_ = upload(supports);
     saved_ = DeviceBuffer<std::uint8_t>(supports.size());
 
-    x_ = DeviceBuffer<float2>(static_cast<std::size_t>(starts_) * n_);
+    if (half()) {
+      xh_ = DeviceBuffer<__half2>(static_cast<std::size_t>(starts_) * n_);
+      wh_ = DeviceBuffer<__half2>(n_);
+      half_plan_ = std::make_unique<cuda::HalfFftPlan>(shape_, stream_);
+    } else {
+      x_ = DeviceBuffer<float2>(static_cast<std::size_t>(starts_) * n_);
+    }
     w_ = DeviceBuffer<float2>(static_cast<std::size_t>(batch_) * n_);
     const int partial_count =
         options.variant == Variant::naive ? cuda::error_naive_blocks(n_) : batch_ * blocks_;
@@ -95,8 +113,13 @@ class CudaSolver final : public Solver {
     for (int g = 0; g < groups_; ++g) {
       cuda::random_wave(w_.get(), amp_.get(), n_, batch_, options.seed,
                         static_cast<std::uint64_t>(g * batch_), stream_);
-      plan_.inverse(w_.get(), x(g));
-      cuda::support_project(x(g), support(g), n_, batch_, stream_);
+      if (half()) {
+        plan_.inverse(w_.get(), w_.get());
+        cuda::to_half(w_.get(), support(g), xh(g), n_, stream_);
+      } else {
+        plan_.inverse(w_.get(), x(g));
+        cuda::support_project(x(g), support(g), n_, batch_, stream_);
+      }
     }
     stream_.sync();
   }
@@ -122,10 +145,20 @@ class CudaSolver final : public Solver {
   }
 
   std::vector<Reconstruction> results() const override {
-    std::vector<Complex> x_host(x_.size());
+    std::vector<Complex> x_host(static_cast<std::size_t>(starts_) * n_);
     std::vector<std::uint8_t> s_host(support_.size());
-    QPCU_CHECK(
-        cudaMemcpy(x_host.data(), x_.get(), x_.size() * sizeof(float2), cudaMemcpyDeviceToHost));
+    if (half()) {
+      for (int s = 0; s < starts_; ++s) {
+        cuda::to_float(xh(s), w_.get(), n_, stream_);
+        QPCU_CHECK(cudaMemcpyAsync(x_host.data() + static_cast<std::size_t>(s) * n_, w_.get(),
+                                   n_ * sizeof(float2), cudaMemcpyDeviceToHost, stream_));
+      }
+      stream_.sync();
+      for (Complex& v : x_host) v *= amplitude_scale_;
+    } else {
+      QPCU_CHECK(cudaMemcpy(x_host.data(), x_.get(), x_host.size() * sizeof(float2),
+                            cudaMemcpyDeviceToHost));
+    }
     QPCU_CHECK(cudaMemcpy(s_host.data(), support_.get(), support_.size(), cudaMemcpyDeviceToHost));
     std::vector<Reconstruction> out;
     for (int s = 0; s < starts_; ++s) {
@@ -139,10 +172,12 @@ class CudaSolver final : public Solver {
 
  private:
   bool device_reduce() const {
-    return options_.variant == Variant::graph || options_.variant == Variant::batched;
+    return options_.variant == Variant::graph || options_.variant == Variant::batched || half();
   }
+  bool half() const { return options_.variant == Variant::half; }
 
   float2* x(int g) const { return x_.get() + static_cast<std::size_t>(g) * batch_ * n_; }
+  __half2* xh(int g) const { return xh_.get() + static_cast<std::size_t>(g) * n_; }
   std::uint8_t* support(int g) const {
     return support_.get() + static_cast<std::size_t>(g) * batch_ * n_;
   }
@@ -156,7 +191,11 @@ class CudaSolver final : public Solver {
 
   void apply(const Shrinkwrap& o) {
     for (int g = 0; g < groups_; ++g) {
-      cuda::magnitude(x(g), w_.get(), n_, batch_, stream_);
+      if (half()) {
+        cuda::magnitude_half(xh(g), w_.get(), n_, stream_);
+      } else {
+        cuda::magnitude(x(g), w_.get(), n_, batch_, stream_);
+      }
       plan_.forward(w_.get(), w_.get());
       cuda::gaussian(w_.get(), dims3_u32(shape_), o.sigma, batch_, stream_);
       plan_.inverse(w_.get(), w_.get());
@@ -201,6 +240,7 @@ class CudaSolver final : public Solver {
             break;
           case Variant::graph:
           case Variant::batched:
+          case Variant::half:
             graph(g, len, c).launch(stream_);
             break;
         }
@@ -243,8 +283,16 @@ class CudaSolver final : public Solver {
   }
 
   void step_device(int g, UpdateCoefficients c) {
-    float2* w = w_.get();
     int* counter = counters_.get() + g;
+    if (half()) {
+      __half2* w = wh_.get();
+      half_plan_->forward(xh(g), w);
+      cuda::modulus_half(w, signed_amp_.get(), n_, errs(g), counter, blocks_, stream_);
+      half_plan_->inverse(w, w);
+      cuda::update_half(xh(g), w, support(g), n_, c, counter, blocks_, stream_);
+      return;
+    }
+    float2* w = w_.get();
     plan_.forward(x(g), w);
     cuda::modulus_reduced(w, signed_amp_.get(), n_, batch_, errs(g), counter, blocks_, stream_);
     plan_.inverse(w, w);
@@ -321,6 +369,10 @@ class CudaSolver final : public Solver {
   DeviceBuffer<std::uint8_t> saved_;
   DeviceBuffer<float2> x_;
   DeviceBuffer<float2> w_;
+  DeviceBuffer<__half2> xh_;
+  DeviceBuffer<__half2> wh_;
+  std::unique_ptr<cuda::HalfFftPlan> half_plan_;
+  float amplitude_scale_ = 1.0f;
   DeviceBuffer<float> partials_;
   std::vector<float> host_partials_;
   DeviceBuffer<int> counters_;

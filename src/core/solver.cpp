@@ -30,6 +30,8 @@ std::string_view to_string(Variant variant) {
       return "graph";
     case Variant::batched:
       return "batched";
+    case Variant::half:
+      return "half";
   }
   return "?";
 }
@@ -41,7 +43,8 @@ Backend parse_backend(std::string_view name) {
 }
 
 Variant parse_variant(std::string_view name) {
-  for (Variant v : {Variant::naive, Variant::fused, Variant::graph, Variant::batched}) {
+  for (Variant v :
+       {Variant::naive, Variant::fused, Variant::graph, Variant::batched, Variant::half}) {
     if (name == to_string(v)) return v;
   }
   throw std::invalid_argument("unknown variant '" + std::string(name) + "'");

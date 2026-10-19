@@ -157,6 +157,27 @@ TEST(Cuda, BatchedEqualsLoopedStarts) {
   }
 }
 
+TEST(CudaHalf, RejectsNonPowerOfTwoExtents) {
+  REQUIRE_CUDA();
+  const auto s = test::triangle({48, 64}, 12);
+  const Problem p = make_problem(s.intensity, s.shape, s.support);
+  EXPECT_THROW(make_solver(p, {.backend = Backend::cuda, .variant = Variant::half}),
+               std::invalid_argument);
+}
+
+// fp16 keeps about three significant digits, so the iteration stalls near 1e-3
+// instead of converging to float precision; this pins that floor.
+TEST(CudaHalf, RecoversToItsPrecisionFloor) {
+  REQUIRE_CUDA();
+  const auto s = test::triangle({64, 64}, 24);
+  const Problem p = make_problem(s.intensity, s.shape, s.support);
+  const auto runs = reconstruct(p, recipe(HIO{400}, ER{100}),
+                                {.backend = Backend::cuda, .variant = Variant::half, .starts = 4});
+  const auto& best = runs[best_index(runs)];
+  EXPECT_LT(best.error(), 3e-3f);
+  EXPECT_LT(aligned_error(best.object, s.object, s.shape), 5e-3f);
+}
+
 TEST(Cuda, DeviceInfoReportsPeakBandwidth) {
   REQUIRE_CUDA();
   const DeviceInfo info = cuda_device_info();

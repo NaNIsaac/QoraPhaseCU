@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 
 #include <array>
@@ -71,5 +72,21 @@ void shrinkwrap_level(const float2* blurred, const std::uint8_t* support, std::s
 void shrinkwrap_threshold(const float2* blurred, const LevelAccumulator* acc, std::size_t n,
                           int batch, Threshold method, float threshold, std::uint8_t* support,
                           cudaStream_t stream);
+
+// --- fp16 storage --------------------------------------------------------------
+// x and the wave are stored as half2 (re, im); arithmetic stays in fp32. The
+// amplitude is pre-divided by its maximum so values stay inside fp16 range, and
+// the 1/sqrt(n) of the inverse is applied in the update rather than before the
+// inverse FFT, where it would push weak pixels into fp16 subnormals. n is even.
+
+void modulus_half(__half2* w, const float* signed_amp, std::size_t n, double* errs,
+                  const int* counter, int blocks, cudaStream_t stream);
+void update_half(__half2* x, const __half2* p, const std::uint8_t* support, std::size_t n,
+                 detail::UpdateCoefficients c, int* counter, int blocks, cudaStream_t stream);
+// out = in, zeroed outside the support.
+void to_half(const float2* in, const std::uint8_t* support, __half2* out, std::size_t n,
+             cudaStream_t stream);
+void to_float(const __half2* in, float2* out, std::size_t n, cudaStream_t stream);
+void magnitude_half(const __half2* x, float2* out, std::size_t n, cudaStream_t stream);
 
 }  // namespace qpcu::cuda

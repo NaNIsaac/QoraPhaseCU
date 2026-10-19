@@ -2,11 +2,13 @@
 
 #include <cuda_runtime.h>
 #include <cufft.h>
+#include <cufftXt.h>
 
 #include <cstddef>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace qpcu::cuda {
 
@@ -82,6 +84,34 @@ class FftPlan {
   }
   void inverse(cufftComplex* in, cufftComplex* out) const {
     QPCU_CHECK(cufftExecC2C(plan_, in, out, CUFFT_INVERSE));
+  }
+
+ private:
+  cufftHandle plan_{};
+};
+
+// Single fp16 C2C transform; cuFFT supports it for power-of-two extents only.
+class HalfFftPlan {
+ public:
+  template <class Shape>
+  HalfFftPlan(const Shape& shape, cudaStream_t stream) {
+    std::vector<long long> dims(shape.begin(), shape.end());
+    std::size_t workspace = 0;
+    QPCU_CHECK(cufftCreate(&plan_));
+    QPCU_CHECK(cufftXtMakePlanMany(plan_, static_cast<int>(dims.size()), dims.data(), nullptr, 1, 0,
+                                   CUDA_C_16F, nullptr, 1, 0, CUDA_C_16F, 1, &workspace,
+                                   CUDA_C_16F));
+    QPCU_CHECK(cufftSetStream(plan_, stream));
+  }
+  HalfFftPlan(const HalfFftPlan&) = delete;
+  HalfFftPlan& operator=(const HalfFftPlan&) = delete;
+  ~HalfFftPlan() { cufftDestroy(plan_); }
+
+  void forward(void* in, void* out) const {
+    QPCU_CHECK(cufftXtExec(plan_, in, out, CUFFT_FORWARD));
+  }
+  void inverse(void* in, void* out) const {
+    QPCU_CHECK(cufftXtExec(plan_, in, out, CUFFT_INVERSE));
   }
 
  private:
