@@ -19,11 +19,12 @@ enum class Backend { cpu, cuda };
 // benchmarked against each other (docs/OPTIMIZATION.md). Ignored by the CPU
 // backend.
 enum class Variant {
-  naive,    // one kernel per operation, error summed on the host every iteration
-  fused,    // fused element-wise kernels, error partials still summed on the host
-  graph,    // on-device error reduction, iterations replayed from a CUDA graph
-  batched,  // graph, with every start in one batched cuFFT plan
-  half,     // graph with x and the wave stored in fp16, fp16 cuFFT; power-of-two sizes
+  naive,     // one kernel per operation, error summed on the host every iteration
+  fused,     // fused element-wise kernels, error partials still summed on the host
+  graph,     // on-device error reduction, iterations replayed from a CUDA graph
+  batched,   // graph, with every start in one batched cuFFT plan
+  half,      // graph with x and the wave stored in fp16, fp16 cuFFT; power-of-two sizes
+  callback,  // graph with the element-wise work in cuFFT LTO store callbacks
 };
 
 std::string_view to_string(Backend backend);

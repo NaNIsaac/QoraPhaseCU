@@ -19,6 +19,10 @@ inline void check(cudaError_t status, const char* what) {
 }
 
 inline void check(cufftResult status, const char* what) {
+  if (status == CUFFT_MISSING_DEPENDENCY) {
+    throw std::runtime_error(std::string(what) +
+                             ": cuFFT LTO callbacks need the nvJitLink and NVRTC libraries");
+  }
   if (status != CUFFT_SUCCESS) {
     throw std::runtime_error(std::string(what) + ": cuFFT error " + std::to_string(status));
   }
@@ -67,12 +71,29 @@ class Stream {
   cudaStream_t s_{};
 };
 
+// An LTO store callback: `symbol` in the LTO-IR fatbin, called with `info` (a
+// device pointer) on every element the transform writes.
+struct StoreCallback {
+  const char* symbol;
+  const void* fatbin;
+  std::size_t fatbin_size;
+  void* info;
+};
+
 // C2C plan over `batch` contiguous transforms of `shape`, bound to `stream`.
 class FftPlan {
  public:
-  FftPlan(const int* dims, int ndim, int batch, cudaStream_t stream) {
-    QPCU_CHECK(cufftPlanMany(&plan_, ndim, const_cast<int*>(dims), nullptr, 1, 0, nullptr, 1, 0,
-                             CUFFT_C2C, batch));
+  FftPlan(const int* dims, int ndim, int batch, cudaStream_t stream,
+          const StoreCallback* callback = nullptr) {
+    QPCU_CHECK(cufftCreate(&plan_));
+    if (callback) {
+      void* info = callback->info;
+      QPCU_CHECK(cufftXtSetJITCallback(plan_, callback->symbol, callback->fatbin,
+                                       callback->fatbin_size, CUFFT_CB_ST_COMPLEX, &info));
+    }
+    std::size_t workspace = 0;
+    QPCU_CHECK(cufftMakePlanMany(plan_, ndim, const_cast<int*>(dims), nullptr, 1, 0, nullptr, 1, 0,
+                                 CUFFT_C2C, batch, &workspace));
     QPCU_CHECK(cufftSetStream(plan_, stream));
   }
   FftPlan(const FftPlan&) = delete;

@@ -47,6 +47,32 @@ void modulus_reduced(float2* w, const float* signed_amp, std::size_t n, int batc
 void update_fused(float2* x, const float2* p, const std::uint8_t* support, std::size_t n, int batch,
                   detail::UpdateCoefficients c, int* counter, int blocks, cudaStream_t stream);
 
+// --- cuFFT LTO callbacks (callbacks.cu) ---------------------------------------
+// The forward transform stores the modulus projection, the inverse stores the
+// updated x, so the wave is never read or written by a separate kernel.
+
+// Every element adds its error term to slot offset % kErrorSlots, so that
+// concurrent atomics rarely share an address; collect_error sums the slots.
+inline constexpr int kErrorSlots = 4096;
+
+struct ModulusCallbackInfo {
+  const float* signed_amp;
+  float* slots;  // kErrorSlots, zero between iterations
+  float scale;   // 1/sqrt(n)
+};
+
+// x is a double buffer of two halves of `span` elements; the inverse transform
+// writes one half and the callback reads the old x from the other.
+struct UpdateCallbackInfo {
+  float2* x;
+  std::size_t span;
+  const std::uint8_t* support;  // `span` elements, same layout as each half
+  detail::UpdateCoefficients c;
+};
+
+// errs[*counter] += sum of slots; zeroes the slots and increments *counter.
+void collect_error(float* slots, double* errs, int* counter, cudaStream_t stream);
+
 // --- setup and shrinkwrap ------------------------------------------------------
 
 // amp * exp(i 2 pi u) / sqrt(n), the input of an unnormalised inverse FFT.

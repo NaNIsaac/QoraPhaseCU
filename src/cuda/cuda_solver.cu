@@ -9,6 +9,12 @@
 #include "common.cuh"
 #include "kernels.cuh"
 
+#ifdef QORAPHASECU_HAS_CUFFT_LTO
+// LTO-IR of src/cuda/callbacks.cu, embedded at build time.
+extern const unsigned char qpcu_cufft_callbacks[];
+extern const std::size_t qpcu_cufft_callbacks_size;
+#endif
+
 namespace qpcu::detail {
 
 namespace {
@@ -100,7 +106,8 @@ class CudaSolver final : public Solver {
       wh_ = DeviceBuffer<__half2>(n_);
       half_plan_ = std::make_unique<cuda::HalfFftPlan>(shape_, stream_);
     } else {
-      x_ = DeviceBuffer<float2>(static_cast<std::size_t>(starts_) * n_);
+      // The callback variant writes the new x into the other half of a double buffer.
+      x_ = DeviceBuffer<float2>(static_cast<std::size_t>(starts_) * n_ * (callback() ? 2 : 1));
     }
     w_ = DeviceBuffer<float2>(static_cast<std::size_t>(batch_) * n_);
     const int partial_count =
@@ -109,6 +116,7 @@ class CudaSolver final : public Solver {
     host_partials_.resize(static_cast<std::size_t>(partial_count));
     counters_ = DeviceBuffer<int>(static_cast<std::size_t>(groups_));
     level_ = DeviceBuffer<cuda::LevelAccumulator>(static_cast<std::size_t>(batch_));
+    if (callback()) make_callback_plans();
 
     for (int g = 0; g < groups_; ++g) {
       cuda::random_wave(w_.get(), amp_.get(), n_, batch_, options.seed,
@@ -156,8 +164,8 @@ class CudaSolver final : public Solver {
       stream_.sync();
       for (Complex& v : x_host) v *= amplitude_scale_;
     } else {
-      QPCU_CHECK(cudaMemcpy(x_host.data(), x_.get(), x_host.size() * sizeof(float2),
-                            cudaMemcpyDeviceToHost));
+      QPCU_CHECK(
+          cudaMemcpy(x_host.data(), x(0), x_host.size() * sizeof(float2), cudaMemcpyDeviceToHost));
     }
     QPCU_CHECK(cudaMemcpy(s_host.data(), support_.get(), support_.size(), cudaMemcpyDeviceToHost));
     std::vector<Reconstruction> out;
@@ -172,11 +180,17 @@ class CudaSolver final : public Solver {
 
  private:
   bool device_reduce() const {
-    return options_.variant == Variant::graph || options_.variant == Variant::batched || half();
+    return options_.variant == Variant::graph || options_.variant == Variant::batched || half() ||
+           callback();
   }
   bool half() const { return options_.variant == Variant::half; }
+  bool callback() const { return options_.variant == Variant::callback; }
 
-  float2* x(int g) const { return x_.get() + static_cast<std::size_t>(g) * batch_ * n_; }
+  // `parity` picks the half of the callback variant's double buffer; 0 otherwise.
+  float2* x(int g, int parity) const {
+    return x_.get() + (static_cast<std::size_t>(parity) * starts_ + g * batch_) * n_;
+  }
+  float2* x(int g) const { return x(g, parity_); }
   __half2* xh(int g) const { return xh_.get() + static_cast<std::size_t>(g) * n_; }
   std::uint8_t* support(int g) const {
     return support_.get() + static_cast<std::size_t>(g) * batch_ * n_;
@@ -227,7 +241,36 @@ class CudaSolver final : public Solver {
                                cudaMemcpyDeviceToDevice, stream_));
   }
 
+  void make_callback_plans() {
+#ifdef QORAPHASECU_HAS_CUFFT_LTO
+    slots_ = DeviceBuffer<float>(cuda::kErrorSlots);
+    QPCU_CHECK(cudaMemset(slots_.get(), 0, cuda::kErrorSlots * sizeof(float)));
+    const cuda::ModulusCallbackInfo modulus{signed_amp_.get(), slots_.get(),
+                                            1.0f / std::sqrt(static_cast<float>(n_))};
+    modulus_info_ = upload(std::vector{modulus});
+    update_info_ = DeviceBuffer<cuda::UpdateCallbackInfo>(1);
+    const auto dims = fft_dims(shape_);
+    const auto ndim = static_cast<int>(dims.size());
+    const cuda::StoreCallback store_modulus{"qpcu_store_modulus", qpcu_cufft_callbacks,
+                                            qpcu_cufft_callbacks_size, modulus_info_.get()};
+    const cuda::StoreCallback store_update{"qpcu_store_update", qpcu_cufft_callbacks,
+                                           qpcu_cufft_callbacks_size, update_info_.get()};
+    modulus_plan_ = std::make_unique<cuda::FftPlan>(dims.data(), ndim, 1, stream_, &store_modulus);
+    update_plan_ = std::make_unique<cuda::FftPlan>(dims.data(), ndim, 1, stream_, &store_update);
+#else
+    throw std::runtime_error(
+        "the callback variant needs a build with cuFFT LTO callbacks (QORAPHASECU_CUFFT_LTO)");
+#endif
+  }
+
   void iterate(int n, UpdateCoefficients c) {
+    if (callback()) {
+      // The update callback reads its coefficients from device memory, so the
+      // captured graphs stay valid when the algorithm changes.
+      update_host_ = {x_.get(), static_cast<std::size_t>(starts_) * n_, support_.get(), c};
+      QPCU_CHECK(cudaMemcpyAsync(update_info_.get(), &update_host_, sizeof(update_host_),
+                                 cudaMemcpyHostToDevice, stream_));
+    }
     for (int done = 0; done < n;) {
       const int len = std::min(n - done, options_.sync_every - iteration_ % options_.sync_every);
       for (int g = 0; g < groups_; ++g) {
@@ -241,10 +284,12 @@ class CudaSolver final : public Solver {
           case Variant::graph:
           case Variant::batched:
           case Variant::half:
+          case Variant::callback:
             graph(g, len, c).launch(stream_);
             break;
         }
       }
+      if (callback()) parity_ ^= len & 1;
       done += len;
       iteration_ += len;
       run_iterations_ += len;
@@ -282,8 +327,15 @@ class CudaSolver final : public Solver {
     record_host_errors(g, static_cast<std::size_t>(blocks_));
   }
 
-  void step_device(int g, UpdateCoefficients c) {
+  void step_device(int g, UpdateCoefficients c, int parity) {
     int* counter = counters_.get() + g;
+    if (callback()) {
+      float2* w = w_.get();
+      modulus_plan_->forward(x(g, parity), w);
+      cuda::collect_error(slots_.get(), errs(g), counter, stream_);
+      update_plan_->inverse(w, x(g, parity ^ 1));
+      return;
+    }
     if (half()) {
       __half2* w = wh_.get();
       half_plan_->forward(xh(g), w);
@@ -311,10 +363,10 @@ class CudaSolver final : public Solver {
   float to_error(double num) const { return static_cast<float>(std::sqrt(num / (energy_ + kEps))); }
 
   const CudaGraph& graph(int g, int len, UpdateCoefficients c) {
-    const auto key = std::make_tuple(g, len, c.a, c.b);
+    const auto key = std::make_tuple(g, len, c.a, c.b, parity_);
     if (auto it = graphs_.find(key); it != graphs_.end()) return *it->second;
     QPCU_CHECK(cudaStreamBeginCapture(stream_, cudaStreamCaptureModeThreadLocal));
-    for (int i = 0; i < len; ++i) step_device(g, c);
+    for (int i = 0; i < len; ++i) step_device(g, c, (parity_ + i) & 1);
     cudaGraph_t captured{};
     QPCU_CHECK(cudaStreamEndCapture(stream_, &captured));
     return *graphs_.emplace(key, std::make_unique<CudaGraph>(captured)).first->second;
@@ -379,7 +431,14 @@ class CudaSolver final : public Solver {
   DeviceBuffer<double> errs_;
   DeviceBuffer<cuda::LevelAccumulator> level_;
   std::vector<std::vector<float>> errors_;
-  std::map<std::tuple<int, int, float, float>, std::unique_ptr<CudaGraph>> graphs_;
+  std::unique_ptr<cuda::FftPlan> modulus_plan_;
+  std::unique_ptr<cuda::FftPlan> update_plan_;
+  DeviceBuffer<cuda::ModulusCallbackInfo> modulus_info_;
+  DeviceBuffer<cuda::UpdateCallbackInfo> update_info_;
+  cuda::UpdateCallbackInfo update_host_{};
+  DeviceBuffer<float> slots_;
+  int parity_ = 0;
+  std::map<std::tuple<int, int, float, float, int>, std::unique_ptr<CudaGraph>> graphs_;
   int capacity_ = 0;
   int iteration_ = 0;
   int run_iterations_ = 0;

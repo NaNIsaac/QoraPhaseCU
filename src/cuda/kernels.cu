@@ -277,6 +277,22 @@ __global__ void threshold_kernel(const float2* blurred, const LevelAccumulator* 
   }
 }
 
+__global__ void collect_error_kernel(float* slots, double* errs, int* counter) {
+  __shared__ double buf[kThreads];
+  double v = 0.0;
+  for (int i = threadIdx.x; i < kErrorSlots; i += kThreads) {
+    v += slots[i];
+    slots[i] = 0.0f;
+  }
+  buf[threadIdx.x] = v;
+  __syncthreads();
+  for (unsigned s = kThreads / 2; s > 0; s >>= 1) {
+    if (threadIdx.x < s) buf[threadIdx.x] += buf[threadIdx.x + s];
+    __syncthreads();
+  }
+  if (threadIdx.x == 0) errs[(*counter)++] += buf[0];
+}
+
 dim3 grid(int blocks, int batch) {
   return {static_cast<unsigned>(blocks), static_cast<unsigned>(batch), 1};
 }
@@ -340,6 +356,10 @@ void update_fused(float2* x, const float2* p, const std::uint8_t* support, std::
     update_fused_kernel<false>
         <<<grid(blocks, batch), kThreads, 0, stream>>>(x, p, support, n, c, counter);
   }
+}
+
+void collect_error(float* slots, double* errs, int* counter, cudaStream_t stream) {
+  collect_error_kernel<<<1, kThreads, 0, stream>>>(slots, errs, counter);
 }
 
 void random_wave(float2* w, const float* amp, std::size_t n, int batch, std::uint64_t seed,

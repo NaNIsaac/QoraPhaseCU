@@ -130,9 +130,14 @@ TEST_P(CudaVariants, Recovers3D) {
   EXPECT_LT(best, 1e-2f);
 }
 
-INSTANTIATE_TEST_SUITE_P(All, CudaVariants,
-                         ::testing::Values(Variant::naive, Variant::fused, Variant::graph,
-                                           Variant::batched),
+const std::vector<Variant> kVariants{Variant::naive, Variant::fused, Variant::graph,
+                                     Variant::batched,
+#ifdef QORAPHASECU_HAS_CUFFT_LTO
+                                     Variant::callback
+#endif
+};
+
+INSTANTIATE_TEST_SUITE_P(All, CudaVariants, ::testing::ValuesIn(kVariants),
                          [](const auto& p) { return std::string(to_string(p.param)); });
 
 TEST(Cuda, BatchedEqualsLoopedStarts) {
