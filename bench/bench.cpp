@@ -138,11 +138,11 @@ int main(int argc, char** argv) {
 
   std::printf("Single start, HIO, %d timed iterations. ms per iteration (modeled GB/s).\n\n",
               iters);
-  std::printf("| size | cuFFT pair |");
+  std::printf("| size | cuFFT pair | fp16 cuFFT pair |");
   for (const auto& v : variants) {
     if (v != "batched") std::printf(" %s |", v.c_str());
   }
-  std::printf("\n|---|---:|");
+  std::printf("\n|---|---:|---:|");
   for (const auto& v : variants) {
     if (v != "batched") std::printf("---:|");
   }
@@ -155,9 +155,11 @@ int main(int argc, char** argv) {
     std::printf("| %s |", shape_name(shape).c_str());
     if (device) {
       const double ms = fft_pair_ms(shape, iters);
-      std::printf(" %.3f (%.0f) |", ms, gbs(kFftPairBytes, n, ms));
+      const double half_ms = fft_pair_ms(shape, iters, true);
+      std::printf(" %.3f (%.0f) | %.3f (%.0f) |", ms, gbs(kFftPairBytes, n, ms), half_ms,
+                  gbs(kFftPairBytes / 2, n, half_ms));
     } else {
-      std::printf(" - |");
+      std::printf(" - | - |");
     }
     for (const auto& name : variants) {
       if (name == "batched") continue;

@@ -1,5 +1,6 @@
 #include <cuda_runtime.h>
 #include <cufft.h>
+#include <cufftXt.h>
 
 #include <algorithm>
 #include <stdexcept>
@@ -15,17 +16,19 @@ void check(bool ok, const char* what) {
 
 }  // namespace
 
-double fft_pair_ms(const qpcu::Shape& shape, int iters) {
-  std::vector<int> dims;
-  for (std::size_t d : shape) dims.push_back(static_cast<int>(d));
+double fft_pair_ms(const qpcu::Shape& shape, int iters, bool half) {
+  std::vector<long long> dims(shape.begin(), shape.end());
   const std::size_t n = qpcu::numel(shape);
   cufftComplex* data = nullptr;
   check(cudaMalloc(&data, n * sizeof(cufftComplex)) == cudaSuccess, "cudaMalloc");
   check(cudaMemset(data, 0, n * sizeof(cufftComplex)) == cudaSuccess, "cudaMemset");
+  const cudaDataType type = half ? CUDA_C_16F : CUDA_C_32F;
   cufftHandle plan{};
-  check(cufftPlanMany(&plan, static_cast<int>(dims.size()), dims.data(), nullptr, 1, 0, nullptr, 1,
-                      0, CUFFT_C2C, 1) == CUFFT_SUCCESS,
-        "cufftPlanMany");
+  std::size_t workspace = 0;
+  check(cufftCreate(&plan) == CUFFT_SUCCESS, "cufftCreate");
+  check(cufftXtMakePlanMany(plan, static_cast<int>(dims.size()), dims.data(), nullptr, 1, 0, type,
+                            nullptr, 1, 0, type, 1, &workspace, type) == CUFFT_SUCCESS,
+        "cufftXtMakePlanMany");
   // Replayed from a graph like the graph variants, so launch overhead does not
   // set the floor at small sizes.
   cudaStream_t stream{};
@@ -36,8 +39,8 @@ double fft_pair_ms(const qpcu::Shape& shape, int iters) {
   cudaGraphExec_t exec{};
   check(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal) == cudaSuccess, "capture");
   for (int i = 0; i < kPerGraph; ++i) {
-    cufftExecC2C(plan, data, data, CUFFT_FORWARD);
-    cufftExecC2C(plan, data, data, CUFFT_INVERSE);
+    cufftXtExec(plan, data, data, CUFFT_FORWARD);
+    cufftXtExec(plan, data, data, CUFFT_INVERSE);
   }
   check(cudaStreamEndCapture(stream, &graph) == cudaSuccess, "end capture");
   check(cudaGraphInstantiate(&exec, graph, 0) == cudaSuccess, "instantiate");
