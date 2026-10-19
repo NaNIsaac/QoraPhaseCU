@@ -1,0 +1,68 @@
+#pragma once
+
+#include <cmath>
+#include <vector>
+
+#include "core/layout.hpp"
+#include "cpu/fft.hpp"
+#include "qoraphasecu/problem.hpp"
+
+namespace qpcu::test {
+
+struct Synthetic {
+  Shape shape;
+  std::vector<Complex> object;
+  std::vector<std::uint8_t> support;
+  std::vector<float> intensity;
+};
+
+// A right triangle (not centrosymmetric, so the twin does not also fit the
+// support) of side m, with an amplitude dip and a phase bump, in an n-wide box.
+// 3D stacks the triangle over m slices with a phase that varies along z.
+inline Synthetic triangle(Shape shape, std::size_t m) {
+  const auto d = detail::dims3(shape);
+  const bool is3d = shape.size() == 3;
+  Synthetic s{
+      shape, std::vector<Complex>(numel(shape)), std::vector<std::uint8_t>(numel(shape)), {}};
+  const auto c = static_cast<double>(m - 1) / 2.0;
+  std::size_t i = 0;
+  for (std::size_t z = 0; z < d[0]; ++z) {
+    for (std::size_t y = 0; y < d[1]; ++y) {
+      for (std::size_t x = 0; x < d[2]; ++x, ++i) {
+        const auto lz = static_cast<double>(z) - static_cast<double>(d[0] / 2 - m / 2);
+        const auto ly = static_cast<double>(y) - static_cast<double>(d[1] / 2 - m / 2);
+        const auto lx = static_cast<double>(x) - static_cast<double>(d[2] / 2 - m / 2);
+        const auto md = static_cast<double>(m);
+        const bool in_box =
+            ly >= 0 && ly < md && lx >= 0 && lx < md && (!is3d || (lz >= 0 && lz < md));
+        if (!in_box || ly + lx >= md) continue;
+        const double ry = ly - c;
+        const double rx = lx - c;
+        const double amp = 1.0 - 0.5 * std::exp(-(rx * rx + ry * ry) / 20.0);
+        const double phase = 1.2 * std::exp(-((rx + 4) * (rx + 4) + (ry + 4) * (ry + 4)) / 30.0) +
+                             (is3d ? 0.3 * (lz - c) / md : 0.0);
+        s.object[i] = std::polar(static_cast<float>(amp), static_cast<float>(phase));
+        s.support[i] = 1;
+      }
+    }
+  }
+  auto wave = detail::to_fft_order<Complex>(s.object, shape);
+  cpu::Fft(shape).forward(wave, wave);
+  wave = detail::to_centered<Complex>(wave, shape);
+  s.intensity.resize(wave.size());
+  for (std::size_t k = 0; k < wave.size(); ++k) s.intensity[k] = std::norm(wave[k]);
+  return s;
+}
+
+inline std::vector<Complex> random_field(std::size_t n, unsigned seed) {
+  std::vector<Complex> v(n);
+  unsigned state = seed * 2654435761u + 1u;
+  auto next = [&] {
+    state = state * 1664525u + 1013904223u;
+    return static_cast<float>(state >> 8) / 16777216.0f - 0.5f;
+  };
+  for (auto& z : v) z = {next(), next()};
+  return v;
+}
+
+}  // namespace qpcu::test
