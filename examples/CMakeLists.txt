@@ -1,0 +1,2 @@
+add_executable(qpcu_reconstruct reconstruct.cpp)
+target_link_libraries(qpcu_reconstruct PRIVATE qoraphasecu qoraphasecu_warnings)
