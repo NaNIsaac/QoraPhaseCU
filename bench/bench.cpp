@@ -4,6 +4,7 @@
 //              [--variants cpu,naive,fused,graph,batched] [--cpu-max 1048576]
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <optional>
@@ -63,17 +64,21 @@ qpcu::Problem bench_problem(const Shape& shape) {
 
 struct Timing {
   double ms_per_iter_per_start;
+  double construct_ms;  // make_solver: buffers, plans, random starts
 };
 
 Timing time_hio(const qpcu::Problem& problem, const qpcu::Options& options, int iters) {
+  const auto c0 = std::chrono::steady_clock::now();
   auto solver = qpcu::make_solver(problem, options);
+  const double construct_ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - c0).count();
   // Same length as the timed run, so CUDA graphs are captured here and reused.
   solver->run(qpcu::recipe(qpcu::HIO{iters}));
   const auto t0 = std::chrono::steady_clock::now();
   solver->run(qpcu::recipe(qpcu::HIO{iters}));
   const auto t1 = std::chrono::steady_clock::now();
   const double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-  return {ms / iters / options.starts};
+  return {ms / iters / options.starts, construct_ms};
 }
 
 // Bytes per element per iteration, counting each FFT as one read and one write
@@ -88,6 +93,9 @@ double modeled_bytes(Variant v) {
     case Variant::half:
       // fp16 complex is 4 bytes: FFT pair 2 * 8, modulus 4 + 4 + 4, update 1 + 4 + 4 + 4
       return 2 * 8 + 12 + 13;
+    case Variant::callback:
+      // the callbacks add the amplitude, the support and the old x to the FFTs' traffic
+      return fft_pair + 4 + 1 + 8;
     default:
       // modulus 8 + 4 + 8, update 1 + 8 + 8 + 8
       return fft_pair + 20 + 25;
@@ -104,7 +112,8 @@ double gbs(double bytes_per_elem, std::size_t n, double ms) {
 
 int main(int argc, char** argv) {
   std::vector<std::string> sizes{"256x256", "1024x1024", "2048x2048", "128x128x128", "256x256x256"};
-  std::vector<std::string> variants{"cpu", "naive", "fused", "graph", "half", "batched"};
+  std::vector<std::string> variants{"cpu",  "naive",    "fused",  "graph",
+                                    "half", "callback", "batched"};
   int iters = 200;
   int starts = 8;
   std::size_t cpu_max = std::size_t{1} << 21;
@@ -148,10 +157,12 @@ int main(int argc, char** argv) {
   }
   std::printf("\n");
 
+  std::vector<std::string> construct_rows;
   for (const auto& size : sizes) {
     const Shape shape = parse_shape(size);
     const std::size_t n = qpcu::numel(shape);
     const auto problem = bench_problem(shape);
+    std::string construct_row = "| " + shape_name(shape) + " |";
     std::printf("| %s |", shape_name(shape).c_str());
     if (device) {
       const double ms = fft_pair_ms(shape, iters);
@@ -176,15 +187,30 @@ int main(int argc, char** argv) {
         const auto t = time_hio(problem, {.backend = Backend::cuda, .variant = v}, iters);
         std::printf(" %.3f (%.0f) |", t.ms_per_iter_per_start,
                     gbs(modeled_bytes(v), n, t.ms_per_iter_per_start));
+        construct_row += " " + std::to_string(std::lround(t.construct_ms)) + " |";
       } else {
         std::printf(" - |");
       }
     }
     std::printf("\n");
     std::fflush(stdout);
+    construct_rows.push_back(construct_row);
   }
 
   if (!device) return 0;
+
+  // The callback variant links its callbacks into cuFFT's kernels while making
+  // its plans, which shows up here rather than in the iteration time.
+  std::printf("\nSolver construction, ms (first solver of each size and variant).\n\n| size |");
+  for (const auto& v : variants) {
+    if (v != "batched" && v != "cpu") std::printf(" %s |", v.c_str());
+  }
+  std::printf("\n|---|");
+  for (const auto& v : variants) {
+    if (v != "batched" && v != "cpu") std::printf("---:|");
+  }
+  std::printf("\n");
+  for (const auto& row : construct_rows) std::printf("%s\n", row.c_str());
 
   std::printf("\n%d starts, HIO, %d timed iterations. ms per iteration per start.\n\n", starts,
               iters);
