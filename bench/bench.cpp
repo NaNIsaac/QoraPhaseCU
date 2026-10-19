@@ -183,7 +183,9 @@ int main(int argc, char** argv) {
 
   std::printf("\n%d starts, HIO, %d timed iterations. ms per iteration per start.\n\n", starts,
               iters);
-  std::printf("| size | graph, looped starts | batched | speedup |\n|---|---:|---:|---:|\n");
+  std::printf(
+      "| size | graph, looped starts | batched, all starts | batched, 2 per plan |\n"
+      "|---|---:|---:|---:|\n");
   for (const auto& size : sizes) {
     const Shape shape = parse_shape(size);
     const std::size_t n = qpcu::numel(shape);
@@ -191,7 +193,7 @@ int main(int argc, char** argv) {
     // about the same size: skip what would not fit.
     const double need = static_cast<double>(n) * (starts * 9.0 + starts * 8.0 * 2);
     if (need > 0.8 * static_cast<double>(device->memory_bytes)) {
-      std::printf("| %s | - | - | does not fit |\n", shape_name(shape).c_str());
+      std::printf("| %s | does not fit | | |\n", shape_name(shape).c_str());
       continue;
     }
     const auto problem = bench_problem(shape);
@@ -199,9 +201,13 @@ int main(int argc, char** argv) {
         problem, {.backend = Backend::cuda, .variant = Variant::graph, .starts = starts}, iters);
     const auto batched = time_hio(
         problem, {.backend = Backend::cuda, .variant = Variant::batched, .starts = starts}, iters);
-    std::printf("| %s | %.3f | %.3f | %.2fx |\n", shape_name(shape).c_str(),
+    const auto pairs = time_hio(
+        problem,
+        {.backend = Backend::cuda, .variant = Variant::batched, .starts = starts, .batch = 2},
+        iters);
+    std::printf("| %s | %.3f | %.3f | %.3f |\n", shape_name(shape).c_str(),
                 looped.ms_per_iter_per_start, batched.ms_per_iter_per_start,
-                looped.ms_per_iter_per_start / batched.ms_per_iter_per_start);
+                pairs.ms_per_iter_per_start);
     std::fflush(stdout);
   }
 
