@@ -93,6 +93,9 @@ double modeled_bytes(Variant v) {
     case Variant::half:
       // fp16 complex is 4 bytes: FFT pair 2 * 8, modulus 4 + 4 + 4, update 1 + 4 + 4 + 4
       return 2 * 8 + 12 + 13;
+    case Variant::mixed:
+      // fp16 FFT pair 2 * 8, modulus 4 + 4 + 4, update 1 + 4 + 8 + 8 and the fp16 copy 4
+      return 2 * 8 + 12 + 25;
     case Variant::callback:
       // the callbacks add the amplitude, the support and the old x to the FFTs' traffic
       return fft_pair + 4 + 1 + 8;
@@ -112,8 +115,8 @@ double gbs(double bytes_per_elem, std::size_t n, double ms) {
 
 int main(int argc, char** argv) {
   std::vector<std::string> sizes{"256x256", "1024x1024", "2048x2048", "128x128x128", "256x256x256"};
-  std::vector<std::string> variants{"cpu",  "naive",    "fused",  "graph",
-                                    "half", "callback", "batched"};
+  std::vector<std::string> variants{"cpu",  "naive", "fused",    "graph",
+                                    "half", "mixed", "callback", "batched"};
   int iters = 200;
   int starts = 8;
   std::size_t cpu_max = std::size_t{1} << 21;
