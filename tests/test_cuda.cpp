@@ -86,6 +86,39 @@ TEST_P(CudaVariants, AgreesWithCpu) {
   }
 }
 
+// An odd element count takes the scalar path instead of the paired 16-byte loads.
+TEST_P(CudaVariants, OddLengthAgreesWithCpu) {
+  REQUIRE_CUDA();
+  const auto s = test::triangle({21, 15}, 6);
+  const Problem p = make_problem(s.intensity, s.shape, s.support);
+  const Recipe r = recipe(HIO{10}, Shrinkwrap{}, ER{10});
+  Options o{.backend = Backend::cuda, .variant = GetParam(), .starts = 2};
+  const auto c = reconstruct(p, r, {.starts = 2});
+  const auto g = reconstruct(p, r, o);
+  for (std::size_t k = 0; k < 2; ++k) {
+    EXPECT_NEAR(g[k].error(), c[k].error(), 1e-3f * c[k].error());
+    EXPECT_LT(relative_diff(g[k].object, c[k].object), 1e-3f);
+  }
+}
+
+TEST_P(CudaVariants, ProgressMatchesTheErrorHistory) {
+  REQUIRE_CUDA();
+  const auto s = test::triangle({32, 32}, 8);
+  const Problem p = make_problem(s.intensity, s.shape, s.support);
+  std::vector<int> seen;
+  std::vector<float> reported;
+  Options o{.backend = Backend::cuda, .variant = GetParam(), .starts = 3, .sync_every = 5};
+  o.progress = [&](int it, std::span<const float> errors) {
+    seen.push_back(it);
+    reported.push_back(errors[2]);
+  };
+  const auto runs = reconstruct(p, recipe(HIO{7}, ER{8}), o);
+  EXPECT_EQ(seen, (std::vector<int>{5, 10, 15}));
+  for (std::size_t k = 0; k < seen.size(); ++k) {
+    EXPECT_EQ(reported[k], runs[2].errors[static_cast<std::size_t>(seen[k] - 1)]);
+  }
+}
+
 TEST_P(CudaVariants, Recovers3D) {
   REQUIRE_CUDA();
   const auto s = test::triangle({32, 32, 32}, 10);
