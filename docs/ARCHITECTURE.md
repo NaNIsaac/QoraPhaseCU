@@ -109,6 +109,11 @@ cmake/cufft_callbacks.cmake as a separate nvcc invocation that emits LTO-IR for
 each entry of `CMAKE_CUDA_ARCHITECTURES`, and cmake/embed.cmake turns the
 fatbin into a C++ byte array linked into the library.
 
+The mixed variant holds x in fp32 next to an fp16 copy that the fp16 forward
+transform reads; its update kernel writes both. `iterate` runs ER stages on the
+fp32 path and refreshes the copy when an fp16 stage begins, and the graph cache
+key records which path a graph was captured for.
+
 Shrinkwrap runs on the device for every variant: magnitude into the complex work
 buffer, forward FFT, Gaussian transfer and 1/n in one kernel, inverse FFT, a
 per-start level reduction (max with `atomicMax` on the float bits, which order

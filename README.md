@@ -115,6 +115,7 @@ pixels.
 | `batched` (default) | `graph` with `Options::batch` starts per batched cuFFT plan |
 | `half` | `graph` with x and the wave in fp16 and fp16 cuFFT; error floor near 1e-3, power-of-two sizes |
 | `callback` | `graph` with the modulus projection and the update in cuFFT LTO store callbacks; needs nvJitLink and NVRTC at run time |
+| `mixed` | `half`'s fp16 transforms for HIO and RAAR, but x and every ER stage in fp32, so the Fourier error has no fp16 floor; power-of-two sizes |
 
 HIO, single start, ms per iteration (RTX 5070, AMD Ryzen 5 7500F, Windows 11,
 CUDA 13.4; `qpcu_bench --iters 200`):
@@ -130,7 +131,10 @@ CUDA 13.4; `qpcu_bench --iters 200`):
 At 256^3 the element-wise kernels of `graph` run at an estimated 83% of the
 672 GB/s DRAM peak and cuFFT takes two thirds of the iteration. Folding them
 into cuFFT callbacks saves 21% there in full precision, but is 15 to 73% slower
-at the sizes whose working set fits the 48 MiB L2. Batching starts into one
+at the sizes whose working set fits the 48 MiB L2. The `mixed` variant runs
+HIO 400 + ER 100 at 256^3 in 1.49 s against 2.08 s for `graph` (`half`: 1.16 s),
+and in the accuracy tests it reaches float-level Fourier error where `half`
+stops near 1e-3. Batching starts into one
 plan is 2.5 times faster per start at 256^2 and up to 3 times slower at 1024^2,
 where it pushes the working set out of the L2. The derivations, the
 multi-start and fp16 accuracy tables, and what was not done are in

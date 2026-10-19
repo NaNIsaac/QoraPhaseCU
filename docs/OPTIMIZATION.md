@@ -38,6 +38,7 @@ is a lower bound.
 | fused, graph, batched | 32 (FFTs) + 45 (two element-wise kernels) = 77 |
 | half | 16 (fp16 FFTs) + 25 (two element-wise kernels) = 41 |
 | callback | 32 (FFTs) + 13 (amplitude, support and old x read in the callbacks) = 45 |
+| mixed, HIO/RAAR iterations | 16 (fp16 FFTs) + 12 (modulus) + 25 (update into fp32 x, fp16 copy) = 53 |
 
 ## Results
 
@@ -222,8 +223,8 @@ fp16 holds about three significant digits, and the iteration stalls there:
 around 1e-3 in both the Fourier error and the object, instead of float
 precision. That is comparable to the noise floor of many measured patterns, but
 it is a floor, not a slower convergence; the test `CudaHalf.RecoversToItsPrecisionFloor`
-pins it. Mixed use (fp16 for the early, exploratory iterations, fp32 for the
-final ER) would keep the speed without the floor; it is not implemented.
+pins it. Step 7 keeps the fp16 transforms for the exploratory iterations and
+moves x and the final ER back to fp32.
 
 ## Step 6: cuFFT LTO callbacks
 
@@ -318,9 +319,67 @@ of each size in the process (ms):
 | 128^3 | 22 | 346 |
 | 256^3 | 134 | 249 |
 
-An earlier run of the same benchmark gave 159 to 362 ms for the callback
-column, so this cost varies. At 256^3 it is paid back after 130 to 250
+Other runs of the same benchmark gave 159 to 362 ms and 89 to 118 ms for the
+callback column, so this cost varies. At 256^3 it is paid back after 130 to 250
 iterations; at the other sizes, where the variant is slower anyway, never.
+
+## Step 7: mixed precision
+
+`Variant::mixed` keeps the fast part of step 5 and drops its floor. HIO and RAAR
+iterations use the fp16 wave and the fp16 transforms of `half`, but x stays in
+fp32: the update reads the fp16 inverse transform, combines it with the fp32 x
+in fp32, writes x back in fp32, and also writes an fp16 copy of x that the next
+forward transform reads. ER stages, which is how a recipe ends, run the fp32
+path of `graph` on the same x. Entering an fp16 stage refreshes the copy from x
+once, since an ER stage or a shrinkwrap may have changed x. Shrinkwrap works on
+the fp32 x.
+
+The fp16 update moves 25 bytes per element against 13 for `half` (fp32 x read
+and written, plus the fp16 copy), so an HIO iteration costs more than in
+`half`. One run of `qpcu_bench --variants graph,half,mixed,callback`:
+
+| size | graph | half | mixed |
+|---|---:|---:|---:|
+| 256^2 | 0.010 | 0.010 | 0.009 |
+| 1024^2 | 0.060 | 0.117 | 0.118 |
+| 2048^2 | 0.444 | 0.457 | 0.569 |
+| 128^3 | 0.111 | 0.083 | 0.092 |
+| 256^3 | 4.113 | 2.310 | 2.665 |
+
+At 256^3 an HIO iteration is 1.54 times faster than `graph` (`half`: 1.78). At
+1024^2 and 2048^2 the fp16 transforms are slow, as in step 5, and mixed is
+slower than `graph`; there the variant has no reason to exist.
+
+Whole recipes at 256^3, one start, a 96-voxel triangle with its known support,
+second run of the recipe on the same solver (wall time):
+
+| recipe at 256^3 | graph | half | mixed |
+|---|---:|---:|---:|
+| HIO 400 + ER 100 | 2.08 s | 1.16 s | 1.49 s |
+| `default_recipe()` | 3.09 s | 1.78 s | 2.33 s |
+
+Accuracy, best of 8 starts after HIO 400 + ER 100 with the known support (the
+same objects as the step 5 table):
+
+| object | variant | Fourier error | rel. object error |
+|---|---|---:|---:|
+| 64^2 | graph | 2.3e-7 | 2.1e-7 |
+| 64^2 | half | 8.1e-4 | 7.9e-4 |
+| 64^2 | mixed | 2.2e-7 | 2.0e-7 |
+| 256^2 | graph | 2.3e-7 | 1.9e-7 |
+| 256^2 | half | 1.3e-3 | 1.3e-3 |
+| 256^2 | mixed | 2.2e-7 | 1.9e-7 |
+| 64^3 | graph | 2.7e-7 | 4.7e-6 |
+| 64^3 | half | 1.0e-3 | 6.4e-3 |
+| 64^3 | mixed | 3.6e-7 | 2.1e-4 |
+
+In 2D the 100 fp32 ER iterations bring mixed to the same error as `graph`. In
+3D its Fourier error reaches float level too, but the object is 2.1e-4 from the
+truth against 4.7e-6 for `graph`. With 400 ER iterations instead of 100 it
+stays at 2.1e-4 (fp32: 1.8e-5), so this is not slow ER convergence: the fp16
+stage ends near a slightly different object that fits the data to float
+precision. Where that difference sits was not investigated. The test
+`CudaMixed.ConvergesPastTheHalfFloor` pins the 2D case.
 
 ## Not done
 
