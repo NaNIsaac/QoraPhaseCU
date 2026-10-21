@@ -45,6 +45,27 @@ QORAPHASECU_TESTS = "OFF"
 QORAPHASECU_BENCH = "OFF"
 QORAPHASECU_EXAMPLES = "OFF"
 
+# CPU backend only; a CUDA wheel would have to ship or locate cuFFT.
+[tool.cibuildwheel]
+build = "cp312-*"
+skip = "*-musllinux_*"
+test-groups = ["dev"]
+test-sources = ["python/tests"]
+test-command = "pytest -q python/tests"
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64"]
+
+[tool.cibuildwheel.windows]
+archs = ["AMD64"]
+
+# Apple Clang has no OpenMP runtime of its own. Homebrew's libomp is built for
+# the runner's macOS, so the wheel targets that version and delocate bundles it.
+[tool.cibuildwheel.macos]
+archs = ["arm64"]
+before-all = "brew install libomp"
+environment = { OpenMP_ROOT = "$(brew --prefix libomp)", MACOSX_DEPLOYMENT_TARGET = "$(sw_vers -productVersion | cut -d. -f1).0" }
+
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]
 
