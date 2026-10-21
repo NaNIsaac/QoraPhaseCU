@@ -378,8 +378,40 @@ In 2D the 100 fp32 ER iterations bring mixed to the same error as `graph`. In
 truth against 4.7e-6 for `graph`. With 400 ER iterations instead of 100 it
 stays at 2.1e-4 (fp32: 1.8e-5), so this is not slow ER convergence: the fp16
 stage ends near a slightly different object that fits the data to float
-precision. Where that difference sits was not investigated. The test
-`CudaMixed.ConvergesPastTheHalfFloor` pins the 2D case.
+precision.
+
+The difference is in the test object, not in the arithmetic. The 64^3 object is
+the 2D triangle extruded over 24 slices with a linear phase along z, so it is
+separable, f(x, y) g(z), and its intensity is |F|^2 |G|^2. Along z this is a 1D
+phase retrieval problem for g, a box with a linear phase, and every zero of the
+z-transform of such a profile lies on the unit circle. Moving one of those zeros
+radially by eps changes |G|, up to a constant factor, only at second order: in
+numpy, eps = 1e-4 changes g by 3.8e-4 and |G| by 5.5e-7 (eps = 1e-3: 3.8e-3 and
+5.5e-5). Objects that differ by a factor depending on z alone therefore fit the
+data to float precision. The fp16 iterations leave the object somewhere along
+these flat directions, and ER, which follows the gradient of the Fourier error,
+has almost nothing to follow there.
+
+Two checks, best of 8 starts after HIO 400 + ER 100 with the known support (one
+run of `reconstruct(variant=...)` through Python). "After the z factor" divides
+the aligned result by the best factor that depends on z alone and measures what
+is left. "Corner cut" removes the voxels with x + y + z >= 36 in the 24-voxel
+box, and the 3D phase bump is a Gaussian of 0.8 rad:
+
+| object | variant | Fourier error | rel. object error | after the z factor |
+|---|---|---:|---:|---:|
+| 64^3 prism (above) | graph | 2.7e-7 | 4.5e-6 | 1.9e-7 |
+| 64^3 prism (above) | mixed | 3.3e-7 | 2.4e-4 | 1.9e-7 |
+| 64^3 prism, corner cut, 3D phase bump | graph | 3.1e-7 | 2.8e-7 | 1.9e-7 |
+| 64^3 prism, corner cut, 3D phase bump | mixed | 3.0e-7 | 3.0e-7 | 1.9e-7 |
+
+All of the mixed error on the prism is a z-only factor; whatever is left is at
+the level of `graph`. Once the corner cut makes the object non-separable, mixed
+reaches the same object error as `graph`. The fp32 `graph` result on the prism
+(4.5e-6) is also mostly the z factor; it is smaller only because the fp32
+iterations wander less along the flat directions. The tests
+`CudaMixed.ConvergesPastTheHalfFloor` (2D) and `ConvergesPastTheHalfFloor3D`
+(the cut prism, object error below 1e-5) pin both cases.
 
 ## Not done
 
