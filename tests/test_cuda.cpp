@@ -198,6 +198,17 @@ TEST(CudaMixed, ConvergesPastTheHalfFloor) {
   EXPECT_LT(aligned_error(best.object, s.object, s.shape), 1e-4f);
 }
 
+TEST(CudaMixed, ConvergesPastTheHalfFloor3D) {
+  REQUIRE_CUDA();
+  const auto s = test::corner(64, 24);
+  const Problem p = make_problem(s.intensity, s.shape, s.support);
+  const auto runs = reconstruct(p, recipe(HIO{400}, ER{100}),
+                                {.backend = Backend::cuda, .variant = Variant::mixed, .starts = 4});
+  const auto& best = runs[best_index(runs)];
+  EXPECT_LT(best.error(), 1e-5f);
+  EXPECT_LT(aligned_error(best.object, s.object, s.shape), 1e-5f);
+}
+
 // ER runs the fp32 path, which differs from graph only by the amplitude scaling.
 TEST(CudaMixed, ErMatchesGraph) {
   REQUIRE_CUDA();

@@ -49,6 +49,28 @@ inline Synthetic triangle(Shape shape, std::size_t m) {
   return s;
 }
 
+// The 3D triangle with the corner x + y + z >= 1.5 m cut off. The plain 3D
+// triangle is separable, f(x, y) g(z), and the z-transform of g has all its zeros
+// on the unit circle, where |G| is flat to first order in the zero's radius: there
+// objects 2e-4 apart fit the data to 3e-7 (docs/OPTIMIZATION.md, step 7).
+inline Synthetic corner(std::size_t n, std::size_t m) {
+  Synthetic s = triangle({n, n, n}, m);
+  const auto lo = static_cast<double>(n / 2 - m / 2);
+  std::size_t i = 0;
+  for (std::size_t z = 0; z < n; ++z) {
+    for (std::size_t y = 0; y < n; ++y) {
+      for (std::size_t x = 0; x < n; ++x, ++i) {
+        if (static_cast<double>(z + y + x) - 3 * lo >= 1.5 * static_cast<double>(m)) {
+          s.object[i] = 0;
+          s.support[i] = 0;
+        }
+      }
+    }
+  }
+  s.intensity = simulate_intensity(s.object, s.shape);
+  return s;
+}
+
 inline std::vector<Complex> random_field(std::size_t n, unsigned seed) {
   std::vector<Complex> v(n);
   unsigned state = seed * 2654435761u + 1u;
