@@ -177,19 +177,20 @@ CUDA 13.4; `qpcu_bench --iters 200`):
 | 128^3 | 16.24 | 0.287 | 0.191 | 0.113 | 0.084 | 0.143 |
 | 256^3 | - | 5.581 | 4.184 | 4.115 | 2.299 | 3.251 |
 
-At 256^3 the element-wise kernels of `graph` run at an estimated 83% of the
-672 GB/s DRAM peak and cuFFT takes two thirds of the iteration. Folding them
+Measured with Nsight Compute at 256^3, the element-wise kernels of `graph` move
+43.7 bytes per element (modeled 45) at 567 GB/s, 89% of the 672 GB/s DRAM peak,
+and cuFFT takes two thirds of the iteration: each 3D transform is three passes,
+91 bytes per element per pair where the model assumed 32. Folding them
 into cuFFT callbacks saves 21% there in full precision, but is 15 to 73% slower
 at the sizes whose working set fits the 48 MiB L2. The `mixed` variant runs
 HIO 400 + ER 100 at 256^3 in 1.49 s against 2.08 s for `graph` (`half`: 1.16 s),
 and in the accuracy tests it reaches float-level Fourier error where `half`
 stops near 1e-3. Batching starts into one
 plan is 2.5 times faster per start at 256^2 and up to 3 times slower at 1024^2,
-where it pushes the working set out of the L2. The derivations, the
-multi-start and fp16 accuracy tables, and what was not done are in
-[docs/OPTIMIZATION.md](docs/OPTIMIZATION.md). Bandwidth there is modeled from
-the bytes each kernel moves; Nsight Compute could not read the GPU counters on
-this machine.
+where it pushes the working set out of the L2 (DRAM traffic per start rises
+sevenfold, the L2 hit rate falls from 90% to 43%). The derivations, the
+measured DRAM traffic next to the byte model, the multi-start and fp16 accuracy
+tables, and what was not done are in [docs/OPTIMIZATION.md](docs/OPTIMIZATION.md).
 
 Against QoraPhase on the same machine (HIO, ms per iteration, best of five,
 `bench/compare_qoraphase.py`). JAX ships CUDA wheels for Linux only, so JAX ran
