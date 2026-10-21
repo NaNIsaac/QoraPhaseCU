@@ -23,14 +23,10 @@ that overlapped with it was discarded (its CPU column read twice the times
 below), and every run reported here was taken with no other benchmark process
 running.
 
-**Bandwidth is modeled, not measured.** Nsight Compute 2026.3.1 is installed,
-but `ncu` stops with `ERR_NVGPUCTRPERM`: on this Windows machine the GPU
-performance counters are restricted to administrators, and that setting was not
-changed. So instead of measured DRAM throughput, bytes per element per iteration are
-counted from the loads and stores each element-wise kernel issues, plus one read
-and one write of the array per FFT (16 bytes per element for complex64). cuFFT
-takes more passes than that for large transforms, so the FFT part of the model
-is a lower bound.
+**DRAM traffic is measured with Nsight Compute; the byte model is kept as a
+cross-check.** The model counts the loads and stores each element-wise kernel
+issues, plus one read and one write of the array per FFT (16 bytes per element
+for complex64):
 
 | variant | modeled bytes / element / iteration |
 |---|---:|
@@ -40,9 +36,33 @@ is a lower bound.
 | callback | 32 (FFTs) + 13 (amplitude, support and old x read in the callbacks) = 45 |
 | mixed, HIO/RAAR iterations | 16 (fp16 FFTs) + 12 (modulus) + 25 (update into fp32 x, fp16 copy) = 53 |
 
+The measurement is `bench/profile.cu` (`qpcu_profile <size> <variant> [iters]
+[starts] [batch]`), which runs 10 HIO iterations once to capture the CUDA graph
+and then again inside an NVTX range, under
+
+```
+ncu --replay-mode application --cache-control none --nvtx --nvtx-include "iterations/"
+    --metrics gpu__time_duration.sum,dram__bytes_op_read.sum,dram__bytes_op_write.sum,
+              dram__throughput.avg.pct_of_peak_sustained_elapsed,lts__t_sector_hit_rate.pct,
+              l1tex__t_{sectors,requests}_pipe_lsu_mem_global_op_{ld,st}.sum, ...
+    qpcu_profile 2048x2048 graph 10
+```
+
+Application replay with uncontrolled caches reruns the whole program once per
+metric pass, so every kernel sees the cache left by the kernel before it, as in
+a normal run; kernel replay would flush or warm the L2 artificially, and the L2
+is the point at the mid sizes. ncu 2026.3.1, one profile per size and variant,
+all taken with no other process on the GPU. Times below are sums of kernel
+durations under ncu's default `--clock-control base`, which holds the GPU clock
+at its base value: at 256^3 they agree with the wall-clock tables to 3%, at the
+small sizes they are longer (256^2 `graph`: 15.9 us against 11). Byte counts and
+hit rates do not depend on the clock.
+
 ## Results
 
-Single start. ms per iteration, modeled GB/s in parentheses.
+Single start. ms per iteration, and in parentheses the modeled bytes divided by
+the wall time: a cross-check, not a measurement. Measured DRAM traffic is in the
+next section.
 
 | size | cuFFT pair | fp16 cuFFT pair | cpu | naive | fused | graph | half | callback |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -83,28 +103,71 @@ by the GPU. The CPU column times only 10 iterations and moves by about 10%.
 
 ## Where the time goes
 
-Subtracting the cuFFT pair from a variant leaves the time spent in its own
-kernels and launches. At 256^3 the arrays (134 MB each) are far larger than the
-48 MiB L2, so this is a clean DRAM measurement:
+Measured per iteration, single start: the sum of kernel times, the DRAM bytes
+moved per array element against the model above, the DRAM throughput over that
+time, and the L2 hit rate over all sectors.
 
-| 256^3 | total | minus cuFFT pair | element-wise bytes | effective bandwidth |
-|---|---:|---:|---:|---:|
-| naive | 5.581 | 2.815 | 91 x 16.8M = 1.53 GB | 542 GB/s (81% of peak) |
-| fused | 4.184 | 1.418 | 45 x 16.8M = 0.75 GB | 532 GB/s (79%) |
-| graph | 4.115 | 1.349 | 0.75 GB | 560 GB/s (83%) |
-| half | 2.299 | 0.882 (minus the fp16 pair) | 25 x 16.8M = 0.42 GB | 476 GB/s (71%) |
+| size | variant | kernel time (us) | DRAM bytes / element | modeled | DRAM GB/s | % of peak | L2 hit |
+|---|---|---:|---:|---:|---:|---:|---:|
+| 256^2 | graph | 15.9 | 6.7 | 77 | 28 | 4 | 97% |
+| 1024^2 | naive | 130.7 | 22.2 | 123 | 178 | 27 | 90% |
+| 1024^2 | graph | 80.9 | 14.9 | 77 | 194 | 29 | 91% |
+| 1024^2 | half | 135.3 | 5.7 | 41 | 44 | 7 | 98% |
+| 1024^2 | callback | 98.1 | 23.8 | 45 | 254 | 38 | 80% |
+| 2048^2 | naive | 786.6 | 89.3 | 123 | 476 | 75 | 68% |
+| 2048^2 | graph | 510.1 | 60.7 | 77 | 499 | 75 | 70% |
+| 2048^2 | half | 514.8 | 19.4 | 41 | 158 | 24 | 93% |
+| 2048^2 | callback | 554.2 | 59.6 | 45 | 451 | 68 | 54% |
+| 2048^2 | mixed | 616.8 | 33.6 | 53 | 229 | 35 | 87% |
+| 128^3 | graph | 171.2 | 30.3 | 77 | 371 | 56 | 85% |
+| 128^3 | half | 122.9 | 14.3 | 41 | 244 | 37 | 89% |
+| 128^3 | callback | 181.2 | 33.2 | 45 | 384 | 58 | 70% |
+| 256^3 | naive | 5204.4 | 179.0 | 123 | 577 | 87 | 41% |
+| 256^3 | fused | 3903.6 | 134.1 | 77 | 577 | 87 | 43% |
+| 256^3 | graph | 4021.7 | 134.9 | 77 | 563 | 87 | 43% |
+| 256^3 | half | 2307.5 | 67.9 | 41 | 494 | 76 | 61% |
+| 256^3 | callback | 3242.7 | 105.1 | 45 | 544 | 83 | 41% |
+| 256^3 | mixed | 2938.9 | 80.5 | 53 | 460 | 76 | 65% |
 
-The element-wise kernels already run near the bandwidth limit even in the naive
-variant; what changes between steps is how many bytes they have to move and how
-much of the iteration is spent waiting on the host. Once the element-wise part
-is at 83% of peak, cuFFT is two thirds of the iteration at 256^3, and the
-remaining levers are the FFT's precision (step 5) or folding the element-wise
-work into the FFT's own passes (step 6).
+Split into the cuFFT kernels and the element-wise kernels (graph unless noted):
 
-At 1024^2 and 128^3 one complex array is 8 MB and 16 MB, so the whole working
-set (x, wave, amplitude, support) fits in L2 and the modeled bandwidth exceeds
-the DRAM peak (1306 and 1458 GB/s). 2048^2 (32 MB per array) sits around the
-DRAM peak because it fits only partly.
+| size | FFT pair (us) | FFT bytes / element | FFT GB/s | element-wise (us) | element-wise bytes / element | element-wise GB/s | % of peak |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 256^2 | 11.1 | 2.3 | 14 | 4.8 | 4.4 | 59 | 9 |
+| 1024^2 | 54.1 | 3.4 | 67 | 26.8 | 11.5 | 450 | 68 |
+| 2048^2 | 305.4 | 32.3 | 444 | 204.7 | 28.4 | 581 | 88 |
+| 128^3 | 104.9 | 12.2 | 243 | 66.2 | 18.1 | 573 | 87 |
+| 256^3 | 2730.6 | 91.2 | 561 | 1291.1 | 43.7 | 567 | 89 |
+| 256^3, naive | 2671.4 | 90.8 | 570 | 2533.0 | 88.2 | 584 | 88 |
+| 256^3, half | 1560.7 | 43.3 | 466 | 746.8 | 24.5 | 551 | 88 |
+| 256^3, mixed | 1833.4 | 44.1 | 403 | 1105.6 | 36.5 | 554 | 87 |
+
+Where the model holds and where it was wrong:
+
+- **Element-wise bytes: right.** At 256^3, where nothing stays in the L2, the
+  kernels move 43.7 bytes per element in `graph` (modeled 45), 88.2 in `naive`
+  (91), 24.5 in `half` (25) and 36.5 in `mixed` (37). They run at 87 to 89% of
+  the DRAM peak; the earlier estimate of 79 to 83%, taken from wall time minus a
+  separately timed FFT pair, was a few points low.
+- **cuFFT traffic: wrong in both directions.** The model charges one read and
+  one write per transform, 32 bytes per element per pair. At 256^3 cuFFT runs
+  each 3D transform as three kernels (two `regular_fft`, one `vector_fft`) and
+  the pair moves 91 bytes per element, almost three times the model. So cuFFT is
+  even more of the 256^3 iteration than the model said: 2.73 of 4.02 ms. At
+  1024^2 and 128^3 the passes mostly hit the L2 and the pair moves only 3.4 and
+  12.2 bytes per element from DRAM.
+- **The mid sizes are L2-bound, not DRAM-bound.** The "modeled GB/s" above the
+  672 GB/s peak in the results table (1376 at 1024^2, 1430 at 128^3) are L2
+  traffic: measured DRAM throughput there is 194 and 371 GB/s, with 91% and 85%
+  of L2 sectors hitting. The whole iteration moves 14.9 bytes per element from
+  DRAM at 1024^2, a fifth of the model.
+- **fp16 cuFFT is slow in 2D because its first pass is uncoalesced.** The fp16
+  2D `regular_fft` kernel issues 32 sectors per load and per store request, the
+  most a warp can touch, against 6.2 and 8 for its fp32 counterpart; at 1024^2 it
+  takes 99.6 us per pair of launches against 32.5 for fp32 although 100% of its
+  L2 sectors hit. In 3D the fp16 kernels issue 8 sectors per request and are the
+  faster ones. This is cuFFT's choice of kernel for fp16 2D extents, not
+  something the variant can change; it is why `half` loses at 1024^2 and 2048^2.
 
 ## Step 1: naive
 
@@ -188,6 +251,20 @@ It helps only where the GPU is under-occupied:
   are slightly faster than the loop (0.056 vs 0.062 ms).
 - 256^3: no difference (4.109 vs 4.164 ms); a single start already saturates
   DRAM.
+
+Nsight Compute confirms the cache explanation. Eight starts, per start and
+iteration, kernel time under ncu, DRAM bytes per element and the L2 hit rate:
+
+| size | looped (`graph`) | batched, all 8 | batched, 2 per plan |
+|---|---|---|---|
+| 256^2 | 16.2 us, 10.0 B, 95% | 5.0 us, 5.1 B, 97% | 9.7 us, 4.7 B, 98% |
+| 1024^2 | 81.1 us, 14.2 B, 90% | 176.9 us, 97.8 B, 43% | 85.9 us, 29.1 B, 85% |
+| 2048^2 | 497.7 us, 58.1 B, 72% | 824.2 us, 104.8 B, 43% | 788.7 us, 100.2 B, 44% |
+| 128^3 | 171.2 us, 30.0 B, 86% | 286.8 us, 73.5 B, 60% | 208.2 us, 43.3 B, 78% |
+
+At 1024^2 the batch of eight moves seven times the DRAM bytes of the loop, and
+the hit rate halves; two per plan stay mostly in the L2. At 2048^2 even two
+starts (134 MB of x and wave) are too many.
 
 So `Options::batch` exists to size the batch to the cache, the same knob as
 QoraPhase's `batch=` but for speed rather than memory.
@@ -292,19 +369,35 @@ builds, each timed in one run with `graph` and the plain cuFFT pair alongside
 - **Callbacks slow cuFFT down by themselves.** Copy-only callbacks cost 0.05 ms
   over the plain pair at 256^3, but 0.016 ms (20%) at 128^3 and 0.12 ms (67%)
   at 2048^2.
-- **The update's two loads are expensive at 2048^2.** The support byte and the
-  old x (9 bytes per element, 38 MB) add 0.13 ms there, about 300 GB/s, against
-  0.27 ms for 151 MB (560 GB/s) at 256^3. A store callback runs in the order in
-  which cuFFT's last pass writes, and for the 2D transforms that order is
-  apparently not contiguous across a warp, so the one-byte support loads waste
-  most of each memory transaction. Without profiler counters this is the
-  explanation that fits the numbers, not a measurement.
-- **The L2 hides what the callbacks save.** At 1024^2, 2048^2 and 128^3 the
-  separate kernels of `graph` read the wave back from the 48 MiB L2 (modeled
-  1376 and 1430 GB/s at 1024^2 and 128^3), so removing their passes saves
-  little, while the costs above are paid at every size. At 256^3 every pass goes
-  to DRAM, the 32 bytes per element that the callbacks avoid are worth about
-  0.8 ms, and the overhead is small.
+- **The update's two loads are expensive at 2048^2**, 0.13 ms for 38 MB, about
+  300 GB/s. Before counters were available this was put down to a store order
+  that is not contiguous across a warp, which would make the one-byte support
+  loads waste most of each transaction. Nsight Compute rules that out for the
+  shipped variant: the callback kernels store at 8 sectors per request, the
+  same as cuFFT's plain last pass (one fully used 256-byte line per warp), and
+  load at 2.9 to 3.1 sectors per request. The inverse transform's last pass
+  needs 2.6 million load sectors per launch in total, fewer than the 4.2 million
+  that scattered support loads alone would take.
+- **What the counters show instead, at 2048^2** (one iteration, kernel times
+  under ncu): the inverse transform with the update callback roughly breaks even
+  with the plain transform plus `update_fused_kernel` (137 + 159 us against 125
+  + 37 + 131 us). The loss is on the forward side: the last pass with the
+  modulus callback takes 125 us and moves 61 MB at 74% of peak, where the plain
+  last pass and `modulus_reduced_kernel` take 41 + 52 us for 22 + 30 MB. It
+  issues 4.3 times as many load requests as the plain pass (0.69 against 0.16
+  million) at about 3 sectors each: the callbacks load one 4- or 8-byte value per
+  thread, where the separate kernels load `float4`s at 12 to 16 sectors per
+  request. And the double-buffered x (122 MB of arrays against 88 MB for
+  `graph`) lowers the L2 read hit rate of the `regular_fft` passes from 53% to
+  30%, so each takes about 10 us longer.
+- **The L2 hides what the callbacks save.** Measured, the callback variant moves
+  59.6 bytes per element per iteration at 2048^2 and `graph` 60.7: no saving,
+  where the model promised 45 against 77, because the separate kernels of
+  `graph` already find much of the wave in the L2 (70% of its sectors hit) and
+  the callbacks make cuFFT's own passes miss more. At 256^3, where nothing
+  stays in the L2, the saving is real and close to the model: 105.1 against
+  134.9 bytes per element (30, modeled 32), and 3.24 against 4.02 ms of kernel
+  time.
 - Fusing only the modulus is the worst of both: it pays the callback overhead
   on the forward plan and still runs the update kernel.
 
@@ -419,9 +512,10 @@ iterations wander less along the flat directions. The tests
   exploit in the iteration. Only the shrinkwrap blur of |x| is real and could use
   R2C; it runs once per 50 iterations in the default recipe.
 - **Bit-packed support.** The support is 1 of the 45 element-wise bytes, so
-  packing it into bits would save under 2%. In the callback variant, where the
-  support load looks expensive at 2048^2, it might matter more; not tried.
-- **Measured bandwidth.** See the note on Nsight Compute at the top.
+  packing it into bits would save under 2%. The counters show no wasted support
+  loads in the callback variant either (step 6); not tried.
+- **Per-instruction counters.** The callback profiles are per kernel, so the
+  callbacks' loads are not separated from cuFFT's own inside the same kernel.
 
 ## CPU reference and QoraPhase (JAX)
 
