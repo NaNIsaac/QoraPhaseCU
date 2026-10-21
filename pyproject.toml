@@ -29,6 +29,8 @@ Issues = "https://github.com/NaNIsaac/QoraPhaseCU/issues"
 
 [dependency-groups]
 dev = ["pytest>=8"]
+# The QoraPhase release the interop and parity tests run against.
+qoraphase = ["qoraphase==0.1.0"]
 
 [tool.scikit-build]
 minimum-version = "build-system.requires"
