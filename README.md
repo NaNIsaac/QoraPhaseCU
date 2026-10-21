@@ -52,6 +52,17 @@ pip install .                                               # CPU only
 pip install . -C cmake.define.QORAPHASECU_CUDA=ON           # with the CUDA backend
 ```
 
+`.github/workflows/wheels.yml` builds CPU-only wheels with cibuildwheel (one
+abi3 wheel for CPython 3.12 and later per platform) for Linux x86_64
+(manylinux_2_28, libgomp bundled), Windows AMD64 (vcomp140 bundled) and macOS
+arm64, and runs the Python tests against each. The macOS wheel is built without
+OpenMP: Apple Clang has none, and Homebrew's libomp would raise the wheel's
+minimum macOS to the runner's (26). Only the CPU reference's element-wise loops
+are single-threaded there; pocketfft still uses its own threads. There are no
+CUDA wheels: they would have to ship or find cuFFT (and, for the callback
+variant, nvJitLink and NVRTC) at run time, so the CUDA backend is built from
+source as above.
+
 ```python
 import numpy as np
 import qoraphasecu as qpc
@@ -192,8 +203,9 @@ on the CPU here:
 
 ## What this does not do
 
-- No ensemble alignment or averaging and no input diagnostics; QoraPhase has
-  those. `aligned_error` aligns to whole pixels for comparison only.
+- No ensemble alignment or averaging and no input diagnostics of its own;
+  `Ensemble.to_qoraphase()` hands the runs to QoraPhase for those.
+  `aligned_error` aligns to whole pixels for comparison only.
 - No pluggable forward model: the propagator is the unitary FFT.
 - No positivity or reality constraint, no partial coherence.
 - No file I/O.
