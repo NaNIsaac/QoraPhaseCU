@@ -27,6 +27,7 @@ from .api import (
     cuda_available,
     reconstruct,
 )
+from .interop import from_qoraphase
 from .recipe import ER, HIO, RAAR, Recipe, Shrinkwrap, default_recipe, detwin, repeat
 
 __all__ = [
@@ -42,6 +43,7 @@ __all__ = [
     "cuda_available",
     "default_recipe",
     "detwin",
+    "from_qoraphase",
     "reconstruct",
     "repeat",
 ]

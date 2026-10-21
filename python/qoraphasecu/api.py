@@ -7,7 +7,8 @@ from typing import Literal
 import numpy as np
 
 from . import _core
-from .recipe import Recipe, default_recipe
+from .interop import from_qoraphase, is_qoraphase
+from .recipe import default_recipe
 
 NEGATIVE_WARN_FRACTION = 0.01
 
@@ -33,6 +34,12 @@ class Reconstruction:
         """Final Fourier error; the ranking key."""
         return float(self.errors[-1]) if self.errors.size else float("nan")
 
+    def to_qoraphase(self):
+        """The same run as a ``qoraphase.Reconstruction``; ``errors`` becomes ``metrics``."""
+        import qoraphase as qp
+
+        return qp.Reconstruction(self.object, self.support, self.errors)
+
 
 @dataclass(frozen=True)
 class Ensemble:
@@ -57,6 +64,16 @@ class Ensemble:
     @property
     def best(self) -> Reconstruction:
         return self.runs[self.ranking[0]]
+
+    def to_qoraphase(self, problem=None):
+        """A ``qoraphase.Ensemble`` of the runs, for its ``align`` and ``average``.
+
+        Pass the ``qoraphase.CDI`` of the measurement as *problem* to have
+        ``average`` score the mean against it, as QoraPhase's own ensembles do.
+        """
+        import qoraphase as qp
+
+        return qp.Ensemble(tuple(run.to_qoraphase() for run in self.runs), problem)
 
 
 def cuda_available() -> bool:
@@ -92,7 +109,7 @@ def reconstruct(
     *,
     support=None,
     mask=None,
-    recipe: Recipe | None = None,
+    recipe=None,
     starts: int = 1,
     batch: int | None = None,
     seed: int | None = None,
@@ -108,7 +125,8 @@ def reconstruct(
         support: boolean, ``True`` inside the object. ``None`` derives an
             autocorrelation support.
         mask: boolean, ``True`` marks *unusable* pixels.
-        recipe: ``None`` uses :func:`default_recipe`.
+        recipe: a :class:`Recipe`, or a QoraPhase recipe or stage (converted by
+            :func:`from_qoraphase`). ``None`` uses :func:`default_recipe`.
         starts: number of random starts; >1 returns an :class:`Ensemble`.
         batch: starts per batched cuFFT plan (``variant="batched"``); ``None``
             puts all of them in one.
@@ -128,7 +146,10 @@ def reconstruct(
         )
     if backend == "auto":
         backend = "cuda" if cuda_available() else "cpu"
-    recipe = default_recipe() if recipe is None else recipe
+    if recipe is None:
+        recipe = default_recipe()
+    elif is_qoraphase(recipe):
+        recipe = from_qoraphase(recipe)
     runs = _core.reconstruct(
         intensity,
         _flag("support", support, intensity.shape),
