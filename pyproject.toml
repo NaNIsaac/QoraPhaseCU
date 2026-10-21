@@ -59,12 +59,12 @@ archs = ["x86_64"]
 [tool.cibuildwheel.windows]
 archs = ["AMD64"]
 
-# Apple Clang has no OpenMP runtime of its own. Homebrew's libomp is built for
-# the runner's macOS, so the wheel targets that version and delocate bundles it.
+# Apple Clang ships no OpenMP runtime, and Homebrew's libomp is built for the
+# runner's macOS (26), which bundling would make the wheel's minimum. Without
+# OpenMP only the CPU reference's element-wise loops lose their threads.
 [tool.cibuildwheel.macos]
 archs = ["arm64"]
-before-all = "brew install libomp"
-environment = { OpenMP_ROOT = "$(brew --prefix libomp)", MACOSX_DEPLOYMENT_TARGET = "$(sw_vers -productVersion | cut -d. -f1).0" }
+config-settings = { "cmake.define.QORAPHASECU_OPENMP" = "OFF" }
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]
