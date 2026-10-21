@@ -48,5 +48,5 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.0
       - run: uv build --wheel
       - run: uv venv
-      - run: uv pip install dist/*.whl pytest
+      - run: uv pip install dist/*.whl pytest --group qoraphase
       - run: .venv/bin/python -m pytest -q python/tests
