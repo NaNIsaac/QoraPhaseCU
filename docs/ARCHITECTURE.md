@@ -130,6 +130,13 @@ released while the engine runs. The Python layer mirrors QoraPhase:
 batch=None, seed=None)` returns a `Reconstruction`, or an `Ensemble` with
 `best` and `ranking` when `starts > 1`.
 
+`python/qoraphasecu/interop.py` maps QoraPhase stages to these by exact type
+and recurses into `Recipe`, `Repeat` and `Detwin`. `reconstruct` recognizes a
+QoraPhase stage by `isinstance` against QoraPhase's `Stage`, looked up in
+`sys.modules`, so importing qoraphasecu never imports QoraPhase or JAX. The
+`to_qoraphase` methods build QoraPhase's result types from the numpy arrays,
+without copying them to a JAX device.
+
 ## Tests
 
 `tests/` (GoogleTest) checks the CPU reference directly: modulus projection is

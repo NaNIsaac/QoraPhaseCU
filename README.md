@@ -105,6 +105,44 @@ conjugate flip. `qpcu::aligned_error(a, reference, shape)` (Python:
 `qpc.aligned_error`) compares two objects after removing all three, to whole
 pixels.
 
+## With QoraPhase
+
+A recipe written for QoraPhase runs here unchanged, and the results go back into
+QoraPhase. Tested against the PyPI release `qoraphase==0.1.0`
+(`uv pip install --group qoraphase`):
+
+```python
+import qoraphase as qp
+import qoraphasecu as qpc
+
+recipe = qp.Recipe(qp.RAAR(200), qp.detwin(qp.HIO(20)), qp.ER(100))
+ensemble = qpc.reconstruct(intensity, support=support, recipe=recipe, starts=8)
+
+qpc.from_qoraphase(recipe)                      # the equivalent qpc.Recipe
+ensemble.best.to_qoraphase()                    # a qp.Reconstruction
+ensemble.to_qoraphase(qp.CDI(intensity, support=support)).average()  # qp.Ensemble
+```
+
+`ER`, `HIO`, `RAAR`, `Shrinkwrap`, `Recipe`, `repeat` and `detwin` convert with
+their parameters. Any other stage, including a subclass of one of these (its
+`step` may differ), raises `TypeError` naming it. The plain arrays already follow
+QoraPhase's conventions: `object` is center-origin complex64, `support` is bool,
+and `errors` (QoraPhase: `metrics`) is the same normalized Fourier error per
+iteration. The random starts are drawn differently, so the same `seed` does not
+give the same runs; `python/tests/test_qoraphase.py` therefore checks that both
+libraries reach a Fourier error below 1e-3 and that their best objects agree to
+1e-2 after alignment.
+
+`examples/qoraphase_gpu.py` runs `qp.default_recipe()` (720 iterations) with 4
+starts and the known support through both, best of 3 after a warm-up. QoraPhase
+runs on JAX's CPU backend (JAX has no CUDA build for Windows); Ryzen 5 7500F,
+RTX 5070:
+
+| size | QoraPhase JAX CPU | QoraPhaseCU CUDA | speed-up | Fourier error JAX / CUDA | CUDA vs JAX object |
+|---|---:|---:|---:|---:|---:|
+| 256^2 | 0.58 s | 0.020 s | 29x | 1.6e-7 / 2.4e-7 | 6.0e-7 |
+| 128^3 | 79.90 s | 0.937 s | 85x | 2.1e-7 / 4.5e-7 | 4.9e-7 |
+
 ## CUDA variants
 
 | variant | what it adds |
