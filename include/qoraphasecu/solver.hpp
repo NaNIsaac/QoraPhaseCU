@@ -45,6 +45,10 @@ struct Options {
   // Must divide `starts`. Lower it when the batch outgrows memory or L2.
   int batch = 0;
   std::uint64_t seed = 0;
+  // Starting objects, center-origin, one array of the problem's size per start, back
+  // to back. Each is cut to the support, like a random start. Empty draws random
+  // phases from `seed` instead.
+  std::vector<Complex> start{};
   // Iterations per CUDA graph launch, and the progress interval.
   int sync_every = 10;
   Progress progress{};

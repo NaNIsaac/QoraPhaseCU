@@ -101,6 +101,23 @@ TEST_P(CudaVariants, OddLengthAgreesWithCpu) {
   }
 }
 
+TEST_P(CudaVariants, GivenStartMatchesCpu) {
+  REQUIRE_CUDA();
+  const auto s = test::triangle({40, 36}, 10);
+  const Problem p = make_problem(s.intensity, s.shape, s.support);
+  const Recipe r = recipe(HIO{5}, RAAR{5}, ER{5});
+  auto start = test::random_field(numel(s.shape), 11);
+  const auto second = test::random_field(numel(s.shape), 12);
+  start.insert(start.end(), second.begin(), second.end());
+  const auto c = reconstruct(p, r, {.starts = 2, .start = start});
+  const auto g = reconstruct(
+      p, r, {.backend = Backend::cuda, .variant = GetParam(), .starts = 2, .start = start});
+  for (std::size_t k = 0; k < 2; ++k) {
+    EXPECT_LT(relative_diff(g[k].object, c[k].object), 1e-4f) << k;
+    EXPECT_NEAR(g[k].error(), c[k].error(), 1e-4f * c[k].error() + 1e-7f) << k;
+  }
+}
+
 TEST_P(CudaVariants, ProgressMatchesTheErrorHistory) {
   REQUIRE_CUDA();
   const auto s = test::triangle({32, 32}, 8);
@@ -170,6 +187,20 @@ TEST(CudaHalf, RejectsNonPowerOfTwoExtents) {
                std::invalid_argument);
   EXPECT_THROW(make_solver(p, {.backend = Backend::cuda, .variant = Variant::mixed}),
                std::invalid_argument);
+}
+
+// The fp16 variants keep the iterate divided by the peak amplitude; a given start
+// has to be brought into that scale, or the first modulus projection would undo it.
+TEST(CudaHalf, GivenStartIsInTheDataScale) {
+  REQUIRE_CUDA();
+  const auto s = test::triangle({64, 64}, 24);
+  const Problem p = make_problem(s.intensity, s.shape, s.support);
+  for (Variant v : {Variant::half, Variant::mixed}) {
+    const auto run =
+        reconstruct(p, recipe(ER{3}), {.backend = Backend::cuda, .variant = v, .start = s.object});
+    EXPECT_LT(run[0].error(), 3e-3f) << to_string(v);
+    EXPECT_LT(relative_diff(run[0].object, s.object), 5e-3f) << to_string(v);
+  }
 }
 
 // fp16 keeps about three significant digits, so the iteration stalls near 1e-3

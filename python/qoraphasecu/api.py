@@ -104,6 +104,19 @@ def _flag(name, array, shape):
     return array.view(np.uint8)
 
 
+def _start(init, shape, starts):
+    if init is None:
+        return None
+    init = np.asarray(init, dtype=np.complex64)
+    if init.shape == shape:
+        init = np.broadcast_to(init, (starts, *shape))
+    if init.shape != (starts, *shape):
+        raise ValueError(
+            f"init.shape {init.shape} must be the intensity's {shape} or (starts, *shape)"
+        )
+    return np.ascontiguousarray(init)
+
+
 def reconstruct(
     intensity,
     *,
@@ -113,6 +126,7 @@ def reconstruct(
     starts: int = 1,
     batch: int | None = None,
     seed: int | None = None,
+    init=None,
     support_threshold: float = 0.1,
     backend: Literal["auto", "cpu", "cuda"] = "auto",
     variant: Literal["naive", "fused", "graph", "batched", "half", "callback", "mixed"] = "batched",
@@ -131,6 +145,9 @@ def reconstruct(
         batch: starts per batched cuFFT plan (``variant="batched"``); ``None``
             puts all of them in one.
         seed: seed of the random starting phases; ``None`` means 0.
+        init: starting object, center-origin, instead of random phases: one array
+            of the intensity's shape for every start, or one per start stacked as
+            ``(starts, *shape)``. It is cut to the support first, as in QoraPhase.
         backend: ``"auto"`` picks CUDA when a device is present.
         variant: CUDA optimisation step, see docs/OPTIMIZATION.md.
     """
@@ -158,6 +175,7 @@ def reconstruct(
         starts,
         0 if batch is None else batch,
         0 if seed is None else seed,
+        _start(init, intensity.shape, starts),
         support_threshold,
         backend,
         variant,

@@ -71,3 +71,23 @@ def test_cuda_matches_cpu(triangle, variant):
     for a, b in zip(cpu, gpu, strict=True):
         np.testing.assert_allclose(b.errors, a.errors, rtol=1e-3)
         assert np.linalg.norm(b.object - a.object) < 1e-3 * np.linalg.norm(a.object)
+
+
+def test_init_replaces_the_random_start(triangle):
+    obj, support, intensity = triangle
+    er = qpc.Recipe(qpc.ER(5))
+    exact = qpc.reconstruct(intensity, support=support, recipe=er, init=obj, backend="cpu")
+    assert exact.error < 1e-5
+    np.testing.assert_allclose(exact.object, obj, atol=1e-5)
+
+    rng = np.random.default_rng(0)
+    starts = (rng.random((2, *obj.shape)) - 0.5).astype(np.complex64)
+    a = qpc.reconstruct(intensity, support=support, recipe=er, starts=2, seed=1, init=starts)
+    b = qpc.reconstruct(intensity, support=support, recipe=er, starts=2, seed=2, init=starts)
+    for x, y in zip(a, b, strict=True):
+        np.testing.assert_array_equal(x.object, y.object)  # the seed no longer matters
+    shared = qpc.reconstruct(intensity, support=support, recipe=er, starts=2, init=starts[0])
+    np.testing.assert_array_equal(shared[0].object, shared[1].object)
+
+    with pytest.raises(ValueError, match=r"init.shape"):
+        qpc.reconstruct(intensity, support=support, recipe=er, starts=3, init=starts)

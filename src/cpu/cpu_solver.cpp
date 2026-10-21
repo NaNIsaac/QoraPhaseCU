@@ -29,8 +29,16 @@ class CpuSolver final : public Solver {
     starts_.resize(static_cast<std::size_t>(options.starts));
     for (std::size_t s = 0; s < starts_.size(); ++s) {
       starts_[s].support = support;
-      starts_[s].x.resize(amplitude_.size());
-      cpu::random_start(amplitude_, support, fft_, options.seed, s, starts_[s].x);
+      if (options.start.empty()) {
+        starts_[s].x.resize(amplitude_.size());
+        cpu::random_start(amplitude_, support, fft_, options.seed, s, starts_[s].x);
+        continue;
+      }
+      const std::size_t n = amplitude_.size();
+      starts_[s].x = to_fft_order<Complex>(std::span(options.start).subspan(s * n, n), shape_);
+      for (std::size_t i = 0; i < n; ++i) {
+        if (!support[i]) starts_[s].x[i] = 0.0f;
+      }
     }
   }
 

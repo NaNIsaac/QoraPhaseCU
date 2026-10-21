@@ -65,16 +65,20 @@ qpcu::Recipe to_recipe(const std::vector<OpTuple>& ops) {
 
 nb::list reconstruct(const Input<float>& intensity, std::optional<Input<std::uint8_t>> support,
                      std::optional<Input<std::uint8_t>> mask, const std::vector<OpTuple>& ops,
-                     int starts, int batch, std::uint64_t seed, float support_threshold,
+                     int starts, int batch, std::uint64_t seed,
+                     std::optional<Input<qpcu::Complex>> start, float support_threshold,
                      const std::string& backend, const std::string& variant, int sync_every) {
   const qpcu::Shape shape = shape_of(intensity);
   const qpcu::Recipe recipe = to_recipe(ops);
-  const qpcu::Options options{.backend = qpcu::parse_backend(backend),
-                              .variant = qpcu::parse_variant(variant),
-                              .starts = starts,
-                              .batch = batch,
-                              .seed = seed,
-                              .sync_every = sync_every};
+  const qpcu::Options options{
+      .backend = qpcu::parse_backend(backend),
+      .variant = qpcu::parse_variant(variant),
+      .starts = starts,
+      .batch = batch,
+      .seed = seed,
+      .start = start ? std::vector<qpcu::Complex>(view(*start).begin(), view(*start).end())
+                     : std::vector<qpcu::Complex>{},
+      .sync_every = sync_every};
   std::vector<qpcu::Reconstruction> runs;
   {
     nb::gil_scoped_release release;
@@ -98,8 +102,8 @@ nb::list reconstruct(const Input<float>& intensity, std::optional<Input<std::uin
 NB_MODULE(_core, m) {
   m.def("reconstruct", &reconstruct, nb::arg("intensity"), nb::arg("support").none(),
         nb::arg("mask").none(), nb::arg("ops"), nb::arg("starts"), nb::arg("batch"),
-        nb::arg("seed"), nb::arg("support_threshold"), nb::arg("backend"), nb::arg("variant"),
-        nb::arg("sync_every"));
+        nb::arg("seed"), nb::arg("start").none(), nb::arg("support_threshold"), nb::arg("backend"),
+        nb::arg("variant"), nb::arg("sync_every"));
   m.def(
       "autocorrelation_support",
       [](const Input<float>& intensity, float threshold) {

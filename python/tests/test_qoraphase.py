@@ -1,7 +1,9 @@
 """Against the QoraPhase release (``uv sync --group qoraphase``); skipped without it.
 
-The two libraries draw their random starts differently, so runs are compared by
-what they converge to, not iteration by iteration.
+The two libraries draw their random starts differently, so random-start runs are
+compared by what they converge to. From a shared ``init`` they are compared
+iteration by iteration, but only over a few iterations: HIO and RAAR amplify
+float32 rounding differences to 1e-2 or more within about 50 iterations.
 """
 
 from dataclasses import dataclass
@@ -85,3 +87,33 @@ def test_results_plug_into_qoraphase(triangle):
     assert isinstance(theirs, qp.Ensemble) and theirs.ranking == ensemble.ranking
     average = theirs.average()
     assert average.metrics.shape == (1,) and average.error < THRESHOLD
+
+
+@pytest.mark.parametrize(
+    "stage", [qp.ER(10), qp.HIO(10, beta=0.7), qp.RAAR(10, beta=0.85)], ids=["ER", "HIO", "RAAR"]
+)
+def test_shared_start_follows_qoraphase_step_by_step(triangle, stage):
+    import jax
+    import jax.numpy as jnp
+    from qoraphase.core.state import ReconState
+
+    _, support, intensity = triangle
+    rng = np.random.default_rng(1)
+    phase = np.exp(2j * np.pi * rng.random(intensity.shape))
+    init = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(np.sqrt(intensity) * phase), norm="ortho"))
+    init = np.where(support, init, 0).astype(np.complex64)
+
+    problem = qp.CDI(intensity, support=support)
+    state = ReconState(
+        obj=jnp.asarray(init),
+        support=problem.support,
+        iteration=jnp.int32(0),
+        key=jax.random.key(0),
+    )
+    theirs, their_errors = qp.Recipe(stage).run(state, problem)
+    ours = qpc.reconstruct(
+        intensity, support=support, recipe=qp.Recipe(stage), init=init, backend="cpu"
+    )
+    theirs = np.asarray(theirs.obj)
+    assert np.linalg.norm(ours.object - theirs) / np.linalg.norm(theirs) < 1e-4
+    np.testing.assert_allclose(ours.errors, np.asarray(their_errors), atol=1e-5)
