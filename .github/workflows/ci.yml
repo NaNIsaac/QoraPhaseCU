@@ -50,3 +50,12 @@ jobs:
       - run: uv venv
       - run: uv pip install dist/*.whl pytest --group qoraphase
       - run: .venv/bin/python -m pytest -q python/tests
+
+  locked:
+    name: Locked environment
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+      - run: uv sync --locked --group qoraphase
+      - run: uv run --locked pytest -q python/tests
