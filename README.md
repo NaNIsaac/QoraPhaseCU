@@ -23,8 +23,8 @@ shrinkwrapped). Fourier error 2.5e-7, relative error against the true object
 
 ## Quick start
 
-Requires CMake 3.28+, a C++20 compiler (MSVC or gcc), and for the GPU backend
-the CUDA Toolkit 12.8 or newer.
+Requires CMake 3.28+, Ninja (the presets use it), a C++20 compiler (MSVC or gcc),
+and for the GPU backend the CUDA Toolkit 12.8 or newer.
 
 ```bash
 cmake --preset cuda-release        # or cpu-release without CUDA
@@ -118,8 +118,8 @@ pixels.
 
 ## With QoraPhase
 
-A recipe written for QoraPhase runs here unchanged, and the results go back into
-QoraPhase. Tested against the PyPI release `qoraphase==0.1.0`
+A QoraPhase recipe built from the stages listed below runs here unchanged, and
+the results go back into QoraPhase. Tested against the PyPI release `qoraphase==0.1.0`
 (`uv pip install --group qoraphase`):
 
 ```python
