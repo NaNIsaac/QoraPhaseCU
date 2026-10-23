@@ -125,13 +125,17 @@ class CudaSolver final : public Solver {
     if (callback()) make_callback_plans();
 
     for (int g = 0; g < groups_; ++g) {
-      cuda::random_wave(w_.get(), amp_.get(), n_, batch_, options.seed,
-                        static_cast<std::uint64_t>(g * batch_), stream_);
+      float2* start = half() ? w_.get() : x(g);
+      if (options.start.empty()) {
+        cuda::random_wave(w_.get(), amp_.get(), n_, batch_, options.seed,
+                          static_cast<std::uint64_t>(g * batch_), stream_);
+        plan_.inverse(w_.get(), start);
+      } else {
+        upload_start(options.start, g, start);
+      }
       if (half()) {
-        plan_.inverse(w_.get(), w_.get());
         cuda::to_half(w_.get(), support(g), xh(g), n_, stream_);
       } else {
-        plan_.inverse(w_.get(), x(g));
         cuda::support_project(x(g), support(g), n_, batch_, stream_);
       }
     }
@@ -201,6 +205,24 @@ class CudaSolver final : public Solver {
     return x_.get() + (static_cast<std::size_t>(parity) * starts_ + g * batch_) * n_;
   }
   float2* x(int g) const { return x(g, parity_); }
+
+  // Copies the given starting objects of group `g` to `out` in FFT order, in the
+  // amplitude scale of the fp16 variants.
+  void upload_start(std::span<const Complex> start, int g, float2* out) {
+    for (int b = 0; b < batch_; ++b) {
+      const auto s = static_cast<std::size_t>(g * batch_ + b);
+      auto host = to_fft_order<Complex>(start.subspan(s * n_, n_), shape_);
+      if (fp16_wave()) {
+        for (Complex& v : host) v /= amplitude_scale_;
+      }
+      static_assert(sizeof(Complex) == sizeof(float2));
+      // on the solver's stream, after whatever still reads `out`; `host` must outlive it
+      QPCU_CHECK(cudaMemcpyAsync(out + static_cast<std::size_t>(b) * n_, host.data(),
+                                 n_ * sizeof(float2), cudaMemcpyHostToDevice, stream_));
+      stream_.sync();
+    }
+  }
+
   __half2* xh(int g) const { return xh_.get() + static_cast<std::size_t>(g) * n_; }
   std::uint8_t* support(int g) const {
     return support_.get() + static_cast<std::size_t>(g) * batch_ * n_;

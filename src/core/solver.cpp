@@ -72,6 +72,10 @@ std::unique_ptr<Solver> make_solver(const Problem& problem, const Options& optio
     throw std::invalid_argument(
         "problem arrays do not match its shape; build it with make_problem");
   }
+  if (!options.start.empty() &&
+      options.start.size() != n * static_cast<std::size_t>(options.starts)) {
+    throw std::invalid_argument("start must hold one array of the problem's size per start");
+  }
   switch (options.backend) {
     case Backend::cpu:
       return detail::make_cpu_solver(problem, options);

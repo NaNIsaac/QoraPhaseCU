@@ -29,6 +29,22 @@ TEST(Recover, AlignedErrorIgnoresShiftPhaseAndTwin) {
   EXPECT_GT(aligned_error(test::random_field(moved.size(), 4), s.object, s.shape), 0.5f);
 }
 
+TEST(Recover, GivenStartReplacesTheRandomOne) {
+  const auto s = test::triangle({32, 24}, 8);
+  const Problem p = make_problem(s.intensity, s.shape, s.support);
+  auto start = s.object;  // the solution is a fixed point of ER
+  const auto other = test::random_field(s.object.size(), 3);
+  start.insert(start.end(), other.begin(), other.end());
+  const auto a = reconstruct(p, recipe(ER{5}), {.starts = 2, .seed = 1, .start = start});
+  const auto b = reconstruct(p, recipe(ER{5}), {.starts = 2, .seed = 2, .start = start});
+  EXPECT_LT(a[0].error(), 1e-5f);
+  for (std::size_t i = 0; i < s.object.size(); ++i) {
+    EXPECT_LT(std::abs(a[0].object[i] - s.object[i]), 1e-5f) << i;
+  }
+  EXPECT_EQ(a[1].object, b[1].object);  // the seed no longer matters
+  EXPECT_THROW(reconstruct(p, recipe(ER{1}), {.starts = 3, .start = start}), std::invalid_argument);
+}
+
 TEST(Recover, HioThenErRecovers2D) {
   const auto s = test::triangle({64, 64}, 20);
   EXPECT_LT(best_aligned_error(s, recipe(HIO{300}, ER{100}), 4), 1e-2f);
