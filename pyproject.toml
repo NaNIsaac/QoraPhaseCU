@@ -26,6 +26,7 @@ dependencies = ["numpy>=2"]
 Homepage = "https://github.com/NaNIsaac/QoraPhaseCU"
 Repository = "https://github.com/NaNIsaac/QoraPhaseCU"
 Issues = "https://github.com/NaNIsaac/QoraPhaseCU/issues"
+Changelog = "https://github.com/NaNIsaac/QoraPhaseCU/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = ["pytest>=8"]
