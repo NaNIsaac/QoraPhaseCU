@@ -25,8 +25,6 @@ int sm_count() {
 
 unsigned blocks_for(std::size_t n) { return static_cast<unsigned>((n + kThreads - 1) / kThreads); }
 
-// --- naive -----------------------------------------------------------------------
-
 __global__ void scale_naive_kernel(float2* w, std::size_t n, float s) {
   const std::size_t i = blockIdx.x * std::size_t{blockDim.x} + threadIdx.x;
   if (i < n) w[i] = {w[i].x * s, w[i].y * s};
@@ -72,8 +70,6 @@ __global__ void update_naive_kernel(float2* x, const float2* p, const std::uint8
     x[i] = {c.a * xi.x + c.b * pi.x, c.a * xi.y + c.b * pi.y};
   }
 }
-
-// --- fused -------------------------------------------------------------------------
 
 // Grid-stride over pairs of complex values so each thread issues 16-byte loads.
 // Only used for even n, where every start is 16-byte aligned.
@@ -170,8 +166,6 @@ __global__ void update_fused_kernel(float2* x, const float2* p, const std::uint8
   }
   if (counter && blockIdx.x == 0 && blockIdx.y == 0 && threadIdx.x == 0) ++*counter;
 }
-
-// --- setup and shrinkwrap -------------------------------------------------------------
 
 __global__ void random_wave_kernel(float2* w, const float* amp, std::size_t n, std::uint64_t seed,
                                    std::uint64_t first_start) {
