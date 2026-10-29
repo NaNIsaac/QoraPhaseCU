@@ -21,6 +21,13 @@ backend with no support given (it is derived from the autocorrelation and
 shrinkwrapped). Fourier error 2.5e-7, relative error against the true object
 7.2e-7. Script: `examples/readme_figure.py`.
 
+## Explore the evidence
+
+- **Reconstruction example:** [figure](docs/reconstruction.png) · [generation script](examples/readme_figure.py) — synthetic intensity and the recovered complex object.
+- **Measured optimization work:** [CUDA optimization log](docs/OPTIMIZATION.md) — benchmarked variants and recorded trade-offs; inspect the stated hardware and conditions before comparing numbers.
+- **Validation and limitations:** [development/testing instructions](#development) · [known scope](#what-this-does-not-do).
+- **Reference implementation:** [QoraPhase](https://github.com/NaNIsaac/QoraPhase) for the corresponding JAX algorithms.
+
 ## Quick start
 
 Requires CMake 3.28+, Ninja (the presets use it), a C++20 compiler (MSVC or gcc),
