@@ -24,7 +24,7 @@ shrinkwrapped). Fourier error 2.5e-7, relative error against the true object
 ## Explore the evidence
 
 - **Reconstruction example:** [figure](docs/reconstruction.png) · [generation script](examples/readme_figure.py) — synthetic intensity and the recovered complex object.
-- **Measured optimization work:** [CUDA optimization log](docs/OPTIMIZATION.md) — benchmarked variants and recorded trade-offs; inspect the stated hardware and conditions before comparing numbers.
+- **Benchmarked optimization work:** [CUDA optimization log](docs/OPTIMIZATION.md) — benchmarked variants and recorded trade-offs; inspect the stated hardware and conditions before comparing numbers.
 - **Validation and limitations:** [development/testing instructions](#development) · [known scope](#what-this-does-not-do).
 - **Reference implementation:** [QoraPhase](https://github.com/NaNIsaac/QoraPhase) for the corresponding JAX algorithms.
 
