@@ -2,26 +2,35 @@
 
 [![Tests](https://github.com/NaNIsaac/QoraPhaseCU/actions/workflows/ci.yml/badge.svg)](https://github.com/NaNIsaac/QoraPhaseCU/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/NaNIsaac/QoraPhaseCU/blob/main/LICENSE)
 
-**Phase retrieval for coherent diffraction imaging in C++20 and CUDA: the algorithms of [QoraPhase](https://github.com/NaNIsaac/QoraPhase), on cuFFT and hand-written kernels.**
+A diffraction detector records intensity but not the wave's phase. To
+estimate the object that produced the pattern, phase-retrieval algorithms
+repeatedly compare an object guess with the measured intensity and apply
+constraints to that guess.
 
-QoraPhaseCU recovers a complex object from a measured 2D or 3D far-field
-intensity with ER, HIO, RAAR, shrinkwrap, detwinning and multiple random starts,
-following QoraPhase operator for operator. It has a CPU reference backend and a
-CUDA backend behind the same C++ API, and a Python API shaped like
-`qoraphase.reconstruct`. The CUDA backend is also an optimization study: each
-step from a naive port to batched, graph-launched, fp16-storage kernels and cuFFT
-LTO callbacks is kept as a selectable variant and measured in
-[docs/OPTIMIZATION.md](docs/OPTIMIZATION.md).
+**QoraPhaseCU implements those algorithms in C++20 and CUDA**, alongside a
+CPU reference implementation. It follows the reconstruction steps of
+[QoraPhase](https://github.com/NaNIsaac/QoraPhase), the JAX version, so that
+the same kinds of reconstruction can be tested on different backends. The
+Python interface also exposes `qpc.reconstruct(...)`.
+
+This repository also documents an **optimization experiment**, not just a
+finished GPU library. It keeps versions ranging from a straightforward port
+to batched and graph-launched kernels, half-precision storage, and cuFFT
+callbacks, with their measured trade-offs in
+[the optimization log](docs/OPTIMIZATION.md). ER, HIO, RAAR, shrinkwrap and
+detwinning are the reconstruction steps described later in this README.
 
 ![Simulated object, its diffraction intensity, and the reconstruction](https://raw.githubusercontent.com/NaNIsaac/QoraPhaseCU/main/docs/reconstruction.png)
 
-The 64×64 object of the QoraPhase README, its noiseless intensity, and the best
-of 8 random starts from `qpc.reconstruct(intensity, starts=8)` on the CUDA
-backend with no support given (it is derived from the autocorrelation and
-shrinkwrapped). Fourier error 2.5e-7, relative error against the true object
-7.2e-7. Script: `examples/readme_figure.py`.
+**Figure:** a known, simulated 64×64 object produces a noiseless diffraction
+pattern. The CUDA reconstruction starts from eight random guesses and shows
+the best resulting object. Its recorded Fourier error is 2.5e-7, and its
+relative error against the known object is 7.2e-7. No object support was
+supplied; the code derived and updated one during reconstruction.
+[Figure script](examples/readme_figure.py). This is a **synthetic test**, not
+validation of an unknown experimental sample.
 
-## Explore the evidence
+## Reconstruction example and performance tests
 
 - **Reconstruction example:** [figure](docs/reconstruction.png) · [generation script](examples/readme_figure.py) — synthetic intensity and the recovered complex object.
 - **Benchmarked optimization work:** [CUDA optimization log](docs/OPTIMIZATION.md) — benchmarked variants and recorded trade-offs; inspect the stated hardware and conditions before comparing numbers.
