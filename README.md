@@ -83,8 +83,8 @@ source as above.
 import numpy as np
 import qoraphasecu as qpc
 
-intensity = np.load("pattern.npy")    # centred 2D or 3D diffraction intensity
-result = qpc.reconstruct(intensity)   # pass support=... if you have one
+intensity = np.load("pattern.npy")  # centred 2D or 3D diffraction intensity
+result = qpc.reconstruct(intensity)  # pass support=... if you have one
 result.amplitude, result.phase, result.errors
 ```
 
@@ -145,8 +145,8 @@ import qoraphasecu as qpc
 recipe = qp.Recipe(qp.RAAR(200), qp.detwin(qp.HIO(20)), qp.ER(100))
 ensemble = qpc.reconstruct(intensity, support=support, recipe=recipe, starts=8)
 
-qpc.from_qoraphase(recipe)                      # the equivalent qpc.Recipe
-ensemble.best.to_qoraphase()                    # a qp.Reconstruction
+qpc.from_qoraphase(recipe)  # the equivalent qpc.Recipe
+ensemble.best.to_qoraphase()  # a qp.Reconstruction
 ensemble.to_qoraphase(qp.CDI(intensity, support=support)).average()  # qp.Ensemble
 ```
 
