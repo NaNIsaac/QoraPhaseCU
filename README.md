@@ -90,6 +90,18 @@ result.amplitude, result.phase, result.errors
 
 `backend="auto"` (the default) uses CUDA when a device is present.
 
+## Documentation
+
+[The QoraPhaseCU page on the documentation hub](https://nanisaac.github.io/docs/qoraphasecu/) is built from this
+repository's `docs/`, and the same pages read on GitHub:
+
+- [Overview](docs/index.md) — what the repository contains and how to read it
+- [Architecture](docs/ARCHITECTURE.md) — the C++ and CUDA layout and the Python bindings
+- [Optimization log](docs/OPTIMIZATION.md) — every variant with its measured trade-off
+- [Paper draft](docs/PAPER.md)
+
+How to build each part and run its tests: [Development](#development).
+
 ## Array conventions
 
 The same as QoraPhase:
@@ -237,3 +249,7 @@ cmake --preset cpu-debug && cmake --build --preset cpu-debug && ctest --preset c
 uv build --wheel && uv venv && uv pip install dist/*.whl pytest && uv run --no-project pytest python/tests
 ./build/cuda-release/bench/qpcu_bench --sizes 256x256,1024x1024
 ```
+
+## License
+
+MIT, see [LICENSE](LICENSE).
